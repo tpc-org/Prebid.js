@@ -1,0 +1,6 @@
+# Exclude fork-only files from git archive output
+FORK_NOTES.md                           export-ignore
+.gitattributes                          export-ignore
+scripts/check-upstream-pr-scope.sh      export-ignore
+modules/tpc*                            export-ignore
+.github/workflows/dispatch-deployment.yml  export-ignore
