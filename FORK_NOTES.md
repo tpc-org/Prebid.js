@@ -121,5 +121,7 @@ gulp build --modules=path/to.json   # build with specific module set
 
 For TPC-specific module dev:
 - The TPC adapter spec lives at `test/spec/modules/tpcBidAdapter_spec.js`.
-  Run with `npx mocha --require @babel/register test/spec/modules/tpcBidAdapter_spec.js`
-  or via the full `npm test` cycle.
+  Run a single spec with:
+    gulp test --file "test/spec/modules/tpcBidAdapter_spec.js" --nolint
+  Run the full suite with:
+    gulp test
