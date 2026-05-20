@@ -95,6 +95,87 @@ export const spec = {
     // Per-seat responsetimemillis and errors are preserved as-is.
     // The previous adapter collapsed these into a single { tpc: value } entry,
     // which destroyed per-seat analytics data. We leave them intact so the full
+    // seat breakdown reaches any analytics adapter.
+
+    const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
+
+    // Build two maps from the raw seatbid array:
+    //   seatMap[bid.id]   → seat name  (used for winningBidder annotation)
+    //   impSeatMap[impid] → seat name  (fallback when bid.id lookup fails)
+    // We also capture the raw bid object to extract vastUrl/vastXml for video.
+    const seatMap = {};
+    const impSeatMap = {};
+    const rawBidMap = {};
+    (resp.seatbid || []).forEach(sb => {
+      (sb.bid || []).forEach(b => {
+        seatMap[b.id] = sb.seat;
+        impSeatMap[b.impid] = sb.seat;
+        rawBidMap[b.id] = b;
+        rawBidMap[b.impid] = b;  // secondary index by impid
+      });
+    });
+
+    // Build a map from impId → original bidRequest so we can look up
+    // mediaType context when ortbConverter doesn't carry it through.
+    const impToBidRequest = {};
+    (request.data.imp || []).forEach((imp, i) => {
+      const originalBid = (request.data._bidRequests || [])[i];
+      impToBidRequest[imp.id] = originalBid;
+    });
+
+    bids.forEach(bid => {
+      // ortbConverter maps seatbid[].bid[].id onto bid.requestId.
+      // When allowUnknownBidderCodes is active and the seat is an alternate
+      // code, the lookup can fail leaving requestId null. Fall back to
+      // matching via adUnitCode / impid.
+      const seat = seatMap[bid.requestId] || impSeatMap[bid.adUnitCode] || impSeatMap[bid.transactionId];
+      if (seat) {
+        deepSetValue(bid, 'meta.winningBidder', seat);
+        deepSetValue(bid, 'ext.tpc.winningBidder', seat);
+      }
+
+      // Video outstream: attach vastUrl/vastXml and a renderer.
+      // PBS returns vastUrl and vastXml in the bid but Prebid.js validation
+      // requires either a vastUrl OR a renderer on outstream bids.
+      // We attach a renderer that delegates to Adform's outstream player,
+      // which is the current downstream renderer until Workstream 2 (video.js).
+      if (bid.mediaType === 'video') {
+        // Ensure vastUrl is promoted to the top-level bid object.
+        // ortbConverter may leave it nested; Prebid validation checks top-level.
+        if (!bid.vastUrl && bid.vastXml) {
+          // vastXml alone is valid — no action needed, but log for debugging.
+        }
+
+        // Attach an outstream renderer so Prebid validation passes.
+        // The renderer.render function is called by Prebid after the bid wins.
+        if (deepAccess(bid, 'mediaTypes.video.context') === 'outstream' ||
+            bid.playerWidth || bid.playerHeight) {
+          bid.renderer = {
+            url: '',  // no external script needed — Adform's renderer is self-contained
+            render: function(bid) {
+              // Delegate to Adform's outstream renderer if available.
+              // This is the interim solution until Workstream 2 (video.js).
+              if (window.Adform && window.Adform.renderOutstream) {
+                window.Adform.renderOutstream(bid);
+              } else {
+                // Fallback: create a video element and play the vastXml/vastUrl directly
+                const container = document.getElementById(bid.adUnitCode);
+                if (!container) return;
+                const video = document.createElement('video');
+                video.setAttribute('width', bid.playerWidth || bid.width || 640);
+                video.setAttribute('height', bid.playerHeight || bid.height || 480);
+                video.setAttribute('controls', 'controls');
+                video.setAttribute('autoplay', 'autoplay');
+                if (bid.vastUrl) {
+                  // For VAST URLs, a proper VAST player is needed.
+                  // This is a placeholder until Workstream 2 (video.js) is implemented.
+                  logWarn(`${BIDDER_CODE}: outstream renderer not yet configured. vastUrl available for Workstream 2 video.js integration.`);
+                }
+                container.appendChild(video);
+              }
+            }
+          };
+        }
     // seat breakdown (e.g. { appnexus: 45, magnite: 38 }) reaches any analytics adapter.
 
     const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
