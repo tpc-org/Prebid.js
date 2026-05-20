@@ -2,7 +2,10 @@ import { ortbConverter } from '../libraries/ortbConverter/converter.js';
 import { pbsExtensions } from '../libraries/pbsExtensions/pbsExtensions.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, VIDEO, NATIVE } from '../src/mediaTypes.js';
-import { deepAccess, deepSetValue, deepClone, logWarn, logError, triggerPixel, isEmpty, shuffle } from '../src/utils.js';
+import {
+  deepAccess, deepSetValue, deepClone,
+  logWarn, logError, triggerPixel, shuffle
+} from '../src/utils.js';
 
 const BIDDER_CODE = 'tpc';
 const PBS_ENDPOINT = 'https://pbs.tpcsrv.com/openrtb2/auction';
@@ -15,19 +18,28 @@ const converter = ortbConverter({
     netRevenue: true,
     ttl: 300,
   },
+
   imp(buildImp, bidRequest, context) {
     const imp = buildImp(bidRequest, context);
-    const { placementId, bidder } = bidRequest.params;
+    const { placementId } = bidRequest.params;
+
     if (placementId) {
-      deepSetValue(imp, 'ext.prebid.bidder.tpc.placementId', placementId);
+      // Map placementId → PBS stored request lookup.
+      // PBS uses this ID to load the stored imp configuration server-side,
+      // which carries the full bidder setup. No bidder config is needed
+      // or sent from the client — adding/changing bidders is a pbs-settings
+      // change only, with no bundle redeploy required.
+      deepSetValue(imp, 'ext.prebid.storedrequest.id', placementId);
     }
-    if (bidder) {
-      deepSetValue(imp, 'ext.prebid.bidder.tpc.bidder', bidder);
-    }
+
     return imp;
   },
+
   overrides: {
     bidResponse: {
+      // Allow callers to opt in to seeing the real downstream seat (winning bidder)
+      // as bid.bidderCode rather than 'tpc'. Useful for analytics tools that expect
+      // the raw bidder name. Off by default so all Prebid targeting keys read 'tpc'.
       bidderCode(orig, bidResponse, bid, { bidRequest }) {
         const useSourceBidderCode = deepAccess(bidRequest, 'params.useSourceBidderCode', false);
         if (useSourceBidderCode) {
@@ -52,17 +64,23 @@ export const spec = {
   },
 
   buildRequests(validBidRequests, bidderRequest) {
-    const { bidder } = validBidRequests[0];
     const data = converter.toORTB({ bidRequests: validBidRequests, bidderRequest });
+
     const accountId = deepAccess(validBidRequests[0], 'params.accountId');
     if (accountId) {
       deepSetValue(data, 'site.publisher.id', accountId);
     }
+
+    // Passthrough carries no bidder hint. PBS resolves the winning bidder
+    // server-side from the stored request config. We preserve the passthrough
+    // object in case pbsExtensions wrote into it, but inject nothing bidder-specific.
     data.ext.prebid.passthrough = {
       ...data.ext.prebid.passthrough,
-      tpc: { bidder },
+      tpc: {},
     };
+
     data.tmax = (bidderRequest.timeout || 1500) - 100;
+
     return {
       method: 'POST',
       url: PBS_ENDPOINT,
@@ -73,23 +91,46 @@ export const spec = {
   interpretResponse(serverResponse, request) {
     if (!serverResponse?.body) return [];
     const resp = deepClone(serverResponse.body);
-    const { bidder } = request.data.ext.prebid.passthrough.tpc;
-    const modifiers = {
-      responsetimemillis: (values) => Math.max(...values),
-      errors: (values) => [].concat(...values),
-    };
-    Object.entries(modifiers).forEach(([field, combineFn]) => {
-      const obj = resp.ext?.[field];
-      if (!isEmpty(obj)) {
-        resp.ext[field] = { [bidder]: combineFn(Object.values(obj)) };
+
+    // Per-seat responsetimemillis and errors are preserved as-is.
+    // The previous adapter collapsed these into a single { tpc: value } entry,
+    // which destroyed per-seat analytics data. We leave them intact so the full
+    // seat breakdown (e.g. { appnexus: 45, magnite: 38 }) reaches any analytics adapter.
+
+    const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
+
+    // Build a map of bid id → seat (winning bidder name) from the raw seatbid array.
+    // seatbid[].seat is the PBS bidder code of the seat that returned this bid
+    // (e.g. 'appnexus', 'magnite'). We annotate each Prebid bid object with this
+    // so it is available for analytics without changing the external bidderCode ('tpc').
+    const seatMap = {};
+    (resp.seatbid || []).forEach(sb => {
+      (sb.bid || []).forEach(b => {
+        seatMap[b.id] = sb.seat;
+      });
+    });
+
+    bids.forEach(bid => {
+      // ortbConverter maps the original seatbid[].bid[].id onto bid.requestId.
+      const seat = seatMap[bid.requestId];
+      if (seat) {
+        // bid.meta.winningBidder — standard Prebid analytics field
+        deepSetValue(bid, 'meta.winningBidder', seat);
+        // bid.ext.tpc.winningBidder — TPC-specific extension for downstream use
+        deepSetValue(bid, 'ext.tpc.winningBidder', seat);
       }
     });
-    return converter.fromORTB({ response: resp, request: request.data }).bids;
+
+    return bids;
   },
 
   getUserSyncs(syncOptions, serverResponses, gdprConsent, uspConsent, gppConsent) {
     if (!syncOptions.iframeEnabled && !syncOptions.pixelEnabled) return [];
 
+    // Derive the list of bidders to sync from ext.responsetimemillis keys.
+    // PBS populates this with one key per seat that responded, regardless of
+    // who won. This means all configured bidders in the stored request get
+    // synced — not just the winner — which maximises match rates across the pool.
     let bidders = [];
     serverResponses.forEach(({ body }) => {
       Object.keys(body?.ext?.responsetimemillis || {}).forEach(b => {
@@ -111,12 +152,8 @@ export const spec = {
         params.set('gdpr_consent', gdprConsent.consentString);
       }
     }
-    if (uspConsent) {
-      params.set('us_privacy', uspConsent);
-    }
-    if (gppConsent?.gppString) {
-      params.set('gpp', gppConsent.gppString);
-    }
+    if (uspConsent) params.set('us_privacy', uspConsent);
+    if (gppConsent?.gppString) params.set('gpp', gppConsent.gppString);
     if (Array.isArray(gppConsent?.applicableSections)) {
       params.set('gpp_sid', gppConsent.applicableSections.join(','));
     }

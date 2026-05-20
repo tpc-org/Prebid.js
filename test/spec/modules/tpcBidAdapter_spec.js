@@ -5,7 +5,7 @@ const expect = require('chai').expect;
 
 const PBS_HOST = 'pbs.tpcsrv.com';
 const ACCOUNT_ID = 'pub-1234';
-const PLACEMENT_ID = 'homepage-leaderboard';
+const PLACEMENT_ID = 'sayhola-37c0d0d2'; // stored request ID — maps to PBS stored imp
 const TEST_DOMAIN = 'example.com';
 const TEST_PAGE = `https://${TEST_DOMAIN}/page.html`;
 const ADUNIT_CODE = '/1234/header-bid-tag-0';
@@ -83,12 +83,17 @@ const BIDDER_REQUEST = {
   start: 1681224591375
 };
 
+// BID_RESPONSE simulates a PBS response where the stored request resolved to
+// two seats (appnexus + magnite) and appnexus won.
+const WINNING_SEAT = 'appnexus';
+const BID_ID = '123456789';
+
 const BID_RESPONSE = {
   seatbid: [
     {
       bid: [
         {
-          id: '123456789',
+          id: BID_ID,
           impid: BID_REQUEST.bidId,
           price: 1.5,
           adm: '<img src="//files.prebid.org/creatives/prebid300x250.png" />',
@@ -114,30 +119,29 @@ const BID_RESPONSE = {
           }
         }
       ],
-      seat: 'appnexus',
+      seat: WINNING_SEAT,
       group: 0
     }
   ],
   cur: 'USD',
   ext: {
+    // Per-seat timing — both seats responded even though only appnexus won.
+    // getUserSyncs uses these keys to trigger syncs for all responding seats.
     responsetimemillis: {
-      appnexus: 50
+      appnexus: 50,
+      magnite: 38,
     },
     tmaxrequest: 900,
     prebid: {
       auctiontimestamp: 1678646619765,
       passthrough: {
-        tpc: {
-          bidder: spec.code
-        }
+        tpc: {}
       }
     }
   }
 };
 
-const S2S_RESPONSE_BIDDER = BID_RESPONSE.seatbid[0].seat;
-
-const buildRequest = (params) => {
+const buildRequest = (params = {}) => {
   const bidRequest = {
     ...BID_REQUEST,
     params: {
@@ -149,6 +153,8 @@ const buildRequest = (params) => {
 };
 
 describe('TPC Bid Adapter', function () {
+  // ─── isBidRequestValid ──────────────────────────────────────────────────────
+
   describe('isBidRequestValid', () => {
     it('should return true for a valid bid with accountId', () => {
       expect(spec.isBidRequestValid(BID_REQUEST)).to.be.true;
@@ -159,36 +165,48 @@ describe('TPC Bid Adapter', function () {
     });
   });
 
+  // ─── buildRequests ──────────────────────────────────────────────────────────
+
   describe('buildRequests', () => {
     const { data, url } = buildRequest();
+
     it('should POST to the correct PBS endpoint', () => {
       expect(url).equal(`https://${PBS_HOST}/openrtb2/auction`);
     });
     it('should set site.publisher.id to the accountId', () => {
       expect(data.site.publisher.id).equal(ACCOUNT_ID);
     });
-    it('should include bidder code in the passthrough object', () => {
-      expect(data.ext.prebid.passthrough.tpc.bidder).equal(spec.code);
-    });
     it('should set tmax below the bidder timeout', () => {
       expect(data.tmax).be.greaterThan(0);
       expect(data.tmax).be.lessThan(BIDDER_REQUEST.timeout);
     });
-    it('should set placementId in imp.ext.prebid.bidder.tpc', () => {
-      expect(data.imp[0].ext.prebid.bidder.tpc.placementId).equal(PLACEMENT_ID);
+
+    // Stored-request routing: placementId maps to ext.prebid.storedrequest.id
+    // so PBS performs the stored imp lookup and resolves bidders server-side.
+    it('should map placementId to imp.ext.prebid.storedrequest.id', () => {
+      expect(data.imp[0].ext.prebid.storedrequest.id).equal(PLACEMENT_ID);
+    });
+
+    // The passthrough must NOT carry a downstream bidder name.
+    // Bidder resolution is entirely server-side via the stored request.
+    it('should not carry a downstream bidder name in the passthrough', () => {
+      expect(data.ext.prebid.passthrough.tpc.bidder).to.be.undefined;
     });
   });
 
   describe('buildRequests without placementId', () => {
     const { data } = buildRequest({ placementId: undefined });
-    it('should not set placementId when not provided', () => {
-      expect(data.imp[0].ext?.prebid?.bidder?.tpc?.placementId).to.be.undefined;
+    it('should not set storedrequest.id when placementId is not provided', () => {
+      expect(data.imp[0].ext?.prebid?.storedrequest?.id).to.be.undefined;
     });
   });
+
+  // ─── interpretResponse ──────────────────────────────────────────────────────
 
   describe('interpretResponse', () => {
     const request = buildRequest();
     const [bid] = spec.interpretResponse({ body: BID_RESPONSE }, request);
+
     it('should return the correct bid values', () => {
       const respBid = BID_RESPONSE.seatbid[0].bid[0];
       expect(bid.cpm).equal(respBid.price);
@@ -196,9 +214,27 @@ describe('TPC Bid Adapter', function () {
       expect(bid.width).equal(respBid.w);
       expect(bid.height).equal(respBid.h);
     });
+
+    // bidderCode stays 'tpc' by default so all Prebid targeting keys read 'tpc'.
+    // The real seat is surfaced separately via meta/ext for analytics use.
     it('should not expose the S2S seat as bidderCode by default', () => {
-      expect(bid.bidderCode).not.equal(S2S_RESPONSE_BIDDER);
+      expect(bid.bidderCode).not.equal(WINNING_SEAT);
     });
+
+    // Winning bidder annotation — available for analytics without affecting targeting.
+    it('should annotate bid.meta.winningBidder with the winning seat', () => {
+      expect(bid.meta.winningBidder).equal(WINNING_SEAT);
+    });
+    it('should annotate bid.ext.tpc.winningBidder with the winning seat', () => {
+      expect(bid.ext.tpc.winningBidder).equal(WINNING_SEAT);
+    });
+
+    // Per-seat responsetimemillis must be preserved intact — not collapsed.
+    // Analytics adapters and getUserSyncs both rely on the full seat breakdown.
+    it('should preserve per-seat responsetimemillis for all responding seats', () => {
+      expect(BID_RESPONSE.ext.responsetimemillis).to.deep.equal({ appnexus: 50, magnite: 38 });
+    });
+
     it('should return an empty array when there is no body', () => {
       expect(spec.interpretResponse({}, request)).to.deep.equal([]);
     });
@@ -207,15 +243,25 @@ describe('TPC Bid Adapter', function () {
   describe('interpretResponse with useSourceBidderCode', () => {
     const request = buildRequest({ useSourceBidderCode: true });
     const [bid] = spec.interpretResponse({ body: BID_RESPONSE }, request);
-    it('should expose the S2S seat as bidderCode', () => {
-      expect(bid.bidderCode).equal(S2S_RESPONSE_BIDDER);
+    it('should expose the S2S seat as bidderCode when useSourceBidderCode is true', () => {
+      expect(bid.bidderCode).equal(WINNING_SEAT);
     });
   });
 
-  describe('getUserSyncs with iframeEnabled', () => {
-    const allSyncs = spec.getUserSyncs({ iframeEnabled: true }, [{ body: BID_RESPONSE }], null, null, null);
+  // ─── getUserSyncs ────────────────────────────────────────────────────────────
+
+  describe('getUserSyncs — multi-seat sync', () => {
+    // getUserSyncs should sync ALL seats that responded (both appnexus and magnite),
+    // not just the winner. This maximises match rates across the full bidder pool
+    // configured in the stored request.
+    const allSyncs = spec.getUserSyncs(
+      { iframeEnabled: true },
+      [{ body: BID_RESPONSE }],
+      null, null, null
+    );
     const [{ url, type }] = allSyncs;
     const parsed = parseUrl(url);
+
     it('should return a single sync object', () => {
       expect(allSyncs.length).equal(1);
     });
@@ -226,13 +272,19 @@ describe('TPC Bid Adapter', function () {
       expect(parsed.hostname).equal(PBS_HOST);
       expect(parsed.pathname).equal('/cookie_sync');
     });
-    it('should include at least one bidder', () => {
-      expect(parsed.search.bidders.split(',').length).be.greaterThan(0);
+    it('should include all responding seats in the bidders param', () => {
+      const syncedBidders = parsed.search.bidders.split(',');
+      expect(syncedBidders).to.include('appnexus');
+      expect(syncedBidders).to.include('magnite');
     });
   });
 
   describe('getUserSyncs with pixelEnabled only', () => {
-    const allSyncs = spec.getUserSyncs({ iframeEnabled: false, pixelEnabled: true }, [{ body: BID_RESPONSE }], null, null, null);
+    const allSyncs = spec.getUserSyncs(
+      { iframeEnabled: false, pixelEnabled: true },
+      [{ body: BID_RESPONSE }],
+      null, null, null
+    );
     it('should return a pixel sync when iframe is not enabled', () => {
       expect(allSyncs.length).equal(1);
       expect(allSyncs[0].type).equal('image');
@@ -240,14 +292,22 @@ describe('TPC Bid Adapter', function () {
   });
 
   describe('getUserSyncs with no sync options enabled', () => {
-    const allSyncs = spec.getUserSyncs({ iframeEnabled: false, pixelEnabled: false }, [{ body: BID_RESPONSE }], null, null, null);
+    const allSyncs = spec.getUserSyncs(
+      { iframeEnabled: false, pixelEnabled: false },
+      [{ body: BID_RESPONSE }],
+      null, null, null
+    );
     it('should return an empty array', () => {
       expect(allSyncs).to.deep.equal([]);
     });
   });
 
   describe('getUserSyncs with no bidders in response', () => {
-    const allSyncs = spec.getUserSyncs({ iframeEnabled: true }, [{ body: {} }], null, null, null);
+    const allSyncs = spec.getUserSyncs(
+      { iframeEnabled: true },
+      [{ body: {} }],
+      null, null, null
+    );
     it('should return an empty array when no bidders responded', () => {
       expect(allSyncs).to.deep.equal([]);
     });
@@ -265,6 +325,7 @@ describe('TPC Bid Adapter', function () {
       gppConsent
     );
     const { search } = parseUrl(url);
+
     it('should include GDPR params', () => {
       expect(search.gdpr).equal('1');
       expect(search.gdpr_consent).equal('abc123');
