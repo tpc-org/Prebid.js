@@ -176,6 +176,29 @@ export const spec = {
             }
           };
         }
+    // seat breakdown (e.g. { appnexus: 45, magnite: 38 }) reaches any analytics adapter.
+
+    const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
+
+    // Build a map of bid id → seat (winning bidder name) from the raw seatbid array.
+    // seatbid[].seat is the PBS bidder code of the seat that returned this bid
+    // (e.g. 'appnexus', 'magnite'). We annotate each Prebid bid object with this
+    // so it is available for analytics without changing the external bidderCode ('tpc').
+    const seatMap = {};
+    (resp.seatbid || []).forEach(sb => {
+      (sb.bid || []).forEach(b => {
+        seatMap[b.id] = sb.seat;
+      });
+    });
+
+    bids.forEach(bid => {
+      // ortbConverter maps the original seatbid[].bid[].id onto bid.requestId.
+      const seat = seatMap[bid.requestId];
+      if (seat) {
+        // bid.meta.winningBidder — standard Prebid analytics field
+        deepSetValue(bid, 'meta.winningBidder', seat);
+        // bid.ext.tpc.winningBidder — TPC-specific extension for downstream use
+        deepSetValue(bid, 'ext.tpc.winningBidder', seat);
       }
     });
 
