@@ -116,22 +116,6 @@ export const spec = {
         deepSetValue(bid, 'meta.winningBidder', seat);
         deepSetValue(bid, 'ext.tpc.winningBidder', seat);
       }
-
-      // Video outstream: Prebid.js validation requires a renderer to be present
-      // on outstream bids. Use Prebid's Renderer.install() API so the render
-      // function is invoked correctly after a bid wins.
-      // This delegates to window.Adform.renderOutstream as the interim solution
-      // until Workstream 2 (video.js) replaces it.
-      if (bid.mediaType === 'video' && (bid.playerWidth || bid.playerHeight)) {
-        bid.renderer = {
-          url: '',
-          render: function(winningBid) {
-            if (window.Adform && window.Adform.renderOutstream) {
-              window.Adform.renderOutstream(winningBid);
-            }
-          }
-        };
-      }
     });
 
     return bids;
