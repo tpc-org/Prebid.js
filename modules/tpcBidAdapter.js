@@ -92,113 +92,45 @@ export const spec = {
     if (!serverResponse?.body) return [];
     const resp = deepClone(serverResponse.body);
 
-    // Per-seat responsetimemillis and errors are preserved as-is.
-    // The previous adapter collapsed these into a single { tpc: value } entry,
-    // which destroyed per-seat analytics data. We leave them intact so the full
-    // seat breakdown reaches any analytics adapter.
-
     const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
 
-    // Build two maps from the raw seatbid array:
-    //   seatMap[bid.id]   → seat name  (used for winningBidder annotation)
-    //   impSeatMap[impid] → seat name  (fallback when bid.id lookup fails)
-    // We also capture the raw bid object to extract vastUrl/vastXml for video.
+    // Build two lookup maps from the raw PBS seatbid array.
+    // seatMap keys by bid.id (primary); impSeatMap keys by impid (fallback).
+    // When allowUnknownBidderCodes is active the winning seat is an alternate
+    // bidder code (e.g. 'adform'). ortbConverter may leave bid.requestId null
+    // in that case, so we fall back through adUnitCode / transactionId.
     const seatMap = {};
     const impSeatMap = {};
-    const rawBidMap = {};
-    (resp.seatbid || []).forEach(sb => {
-      (sb.bid || []).forEach(b => {
+    (resp.seatbid || []).forEach(function(sb) {
+      (sb.bid || []).forEach(function(b) {
         seatMap[b.id] = sb.seat;
         impSeatMap[b.impid] = sb.seat;
-        rawBidMap[b.id] = b;
-        rawBidMap[b.impid] = b;  // secondary index by impid
       });
     });
 
-    // Build a map from impId → original bidRequest so we can look up
-    // mediaType context when ortbConverter doesn't carry it through.
-    const impToBidRequest = {};
-    (request.data.imp || []).forEach((imp, i) => {
-      const originalBid = (request.data._bidRequests || [])[i];
-      impToBidRequest[imp.id] = originalBid;
-    });
-
-    bids.forEach(bid => {
-      // ortbConverter maps seatbid[].bid[].id onto bid.requestId.
-      // When allowUnknownBidderCodes is active and the seat is an alternate
-      // code, the lookup can fail leaving requestId null. Fall back to
-      // matching via adUnitCode / impid.
-      const seat = seatMap[bid.requestId] || impSeatMap[bid.adUnitCode] || impSeatMap[bid.transactionId];
+    bids.forEach(function(bid) {
+      const seat = seatMap[bid.requestId] ||
+                   impSeatMap[bid.adUnitCode] ||
+                   impSeatMap[bid.transactionId];
       if (seat) {
         deepSetValue(bid, 'meta.winningBidder', seat);
         deepSetValue(bid, 'ext.tpc.winningBidder', seat);
       }
 
-      // Video outstream: attach vastUrl/vastXml and a renderer.
-      // PBS returns vastUrl and vastXml in the bid but Prebid.js validation
-      // requires either a vastUrl OR a renderer on outstream bids.
-      // We attach a renderer that delegates to Adform's outstream player,
-      // which is the current downstream renderer until Workstream 2 (video.js).
-      if (bid.mediaType === 'video') {
-        // Ensure vastUrl is promoted to the top-level bid object.
-        // ortbConverter may leave it nested; Prebid validation checks top-level.
-        if (!bid.vastUrl && bid.vastXml) {
-          // vastXml alone is valid — no action needed, but log for debugging.
-        }
-
-        // Attach an outstream renderer so Prebid validation passes.
-        // The renderer.render function is called by Prebid after the bid wins.
-        if (deepAccess(bid, 'mediaTypes.video.context') === 'outstream' ||
-            bid.playerWidth || bid.playerHeight) {
-          bid.renderer = {
-            url: '',  // no external script needed — Adform's renderer is self-contained
-            render: function(bid) {
-              // Delegate to Adform's outstream renderer if available.
-              // This is the interim solution until Workstream 2 (video.js).
-              if (window.Adform && window.Adform.renderOutstream) {
-                window.Adform.renderOutstream(bid);
-              } else {
-                // Fallback: create a video element and play the vastXml/vastUrl directly
-                const container = document.getElementById(bid.adUnitCode);
-                if (!container) return;
-                const video = document.createElement('video');
-                video.setAttribute('width', bid.playerWidth || bid.width || 640);
-                video.setAttribute('height', bid.playerHeight || bid.height || 480);
-                video.setAttribute('controls', 'controls');
-                video.setAttribute('autoplay', 'autoplay');
-                if (bid.vastUrl) {
-                  // For VAST URLs, a proper VAST player is needed.
-                  // This is a placeholder until Workstream 2 (video.js) is implemented.
-                  logWarn(`${BIDDER_CODE}: outstream renderer not yet configured. vastUrl available for Workstream 2 video.js integration.`);
-                }
-                container.appendChild(video);
-              }
+      // Video outstream: Prebid.js validation requires a renderer to be present
+      // on outstream bids. Use Prebid's Renderer.install() API so the render
+      // function is invoked correctly after a bid wins.
+      // This delegates to window.Adform.renderOutstream as the interim solution
+      // until Workstream 2 (video.js) replaces it.
+      if (bid.mediaType === 'video' && (bid.playerWidth || bid.playerHeight)) {
+        bid.renderer = {
+          url: '',
+          render: function(winningBid) {
+            if (window.Adform && window.Adform.renderOutstream) {
+              window.Adform.renderOutstream(winningBid);
             }
-          };
-        }
-    // seat breakdown (e.g. { appnexus: 45, magnite: 38 }) reaches any analytics adapter.
-
-    const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
-
-    // Build a map of bid id → seat (winning bidder name) from the raw seatbid array.
-    // seatbid[].seat is the PBS bidder code of the seat that returned this bid
-    // (e.g. 'appnexus', 'magnite'). We annotate each Prebid bid object with this
-    // so it is available for analytics without changing the external bidderCode ('tpc').
-    const seatMap = {};
-    (resp.seatbid || []).forEach(sb => {
-      (sb.bid || []).forEach(b => {
-        seatMap[b.id] = sb.seat;
-      });
-    });
-
-    bids.forEach(bid => {
-      // ortbConverter maps the original seatbid[].bid[].id onto bid.requestId.
-      const seat = seatMap[bid.requestId];
-      if (seat) {
-        // bid.meta.winningBidder — standard Prebid analytics field
-        deepSetValue(bid, 'meta.winningBidder', seat);
-        // bid.ext.tpc.winningBidder — TPC-specific extension for downstream use
-        deepSetValue(bid, 'ext.tpc.winningBidder', seat);
+          }
+        };
       }
     });
 
