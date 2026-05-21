@@ -1,15 +1,52 @@
 import { ortbConverter } from '../libraries/ortbConverter/converter.js';
 import { pbsExtensions } from '../libraries/pbsExtensions/pbsExtensions.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
+import { Renderer } from '../src/Renderer.js';
 import { BANNER, VIDEO, NATIVE } from '../src/mediaTypes.js';
 import {
   deepAccess, deepSetValue, deepClone,
   logWarn, logError, triggerPixel, shuffle
 } from '../src/utils.js';
 
+/**
+ * tpcBidAdapter — TPC client-side Prebid.js adapter.
+ *
+ * This is the primary integration path:
+ *   PBJS → tpcBidAdapter → PBS → stored request → real bidders (adform, etc.)
+ *
+ * tpcBidAdapter calls https://pbs.tpcsrv.com/openrtb2/auction directly via
+ * buildRequests. PBS resolves the stored imp (referenced via params.placementId)
+ * and runs the real bidder mix server-side. Adding a new bidder or changing
+ * the bidder mix is a pbs-settings change with no client bundle redeploy.
+ *
+ * All bids surface as bidderCode 'tpc' for clean targeting. The real seat
+ * name is preserved in bid.meta.adapterCode (Prebid standard) and
+ * bid.meta.tpc.realBidder (TPC explicit, for analytics).
+ *
+ * Outstream video bids get an interim outstream renderer attached
+ * (AppNexus's ANOutstreamVideo). Workstream 2 replaces this with a TPC-hosted
+ * video.js renderer.
+ *
+ * --- Bid params ---
+ * accountId            (required) TPC account UUID
+ * placementId          (required) PBS stored imp id (per impression)
+ * useSourceBidderCode  (optional) if true, surface real seat as bidderCode
+ *                                 instead of rewriting to 'tpc'. Default false.
+ *
+ * --- Alternative s2sConfig integration (not the default) ---
+ * Publishers wanting to integrate via Prebid Server's built-in s2s adapter
+ * (prebidServerAdapter) can do so without using this adapter; just point
+ * s2sConfig.endpoint at https://pbs.tpcsrv.com/openrtb2/auction. That path
+ * trades adapter-side logic (bidder rewrite, renderer attachment, analytics
+ * fields) for the simpler s2s plumbing — bidder rewrite then has to happen
+ * via pbjs.onEvent handlers in the publisher config, and outstream renderers
+ * must be declared on each ad unit.
+ */
+
 const BIDDER_CODE = 'tpc';
 const PBS_ENDPOINT = 'https://pbs.tpcsrv.com/openrtb2/auction';
 const USER_SYNC_ENDPOINT = 'https://pbs.tpcsrv.com/cookie_sync';
+const OUTSTREAM_RENDERER_URL = 'https://acdn.adnxs.com/video/outstream/ANOutstreamVideo.js';
 const MAX_SYNC_COUNT = 10;
 
 const converter = ortbConverter({
@@ -23,32 +60,50 @@ const converter = ortbConverter({
     const imp = buildImp(bidRequest, context);
     const { placementId } = bidRequest.params;
 
+    // Map placementId → PBS stored imp. PBS loads the full bidder configuration
+    // server-side from this id, so the client sends no bidder-specific params.
     if (placementId) {
-      // Map placementId → PBS stored request lookup.
-      // PBS uses this ID to load the stored imp configuration server-side,
-      // which carries the full bidder setup. No bidder config is needed
-      // or sent from the client — adding/changing bidders is a pbs-settings
-      // change only, with no bundle redeploy required.
       deepSetValue(imp, 'ext.prebid.storedrequest.id', placementId);
     }
-
     return imp;
   },
-
-  overrides: {
-    bidResponse: {
-      // Allow callers to opt in to seeing the real downstream seat (winning bidder)
-      // as bid.bidderCode rather than 'tpc'. Useful for analytics tools that expect
-      // the raw bidder name. Off by default so all Prebid targeting keys read 'tpc'.
-      bidderCode(orig, bidResponse, bid, { bidRequest }) {
-        const useSourceBidderCode = deepAccess(bidRequest, 'params.useSourceBidderCode', false);
-        if (useSourceBidderCode) {
-          orig.apply(this, [...arguments].slice(1));
-        }
-      },
-    },
-  },
 });
+
+/**
+ * Attach the interim outstream renderer to a video bid.
+ * Workstream 2 replaces ANOutstreamVideo with a TPC-hosted video.js bundle.
+ */
+function attachOutstreamRenderer(bid) {
+  const renderer = Renderer.install({
+    id: bid.adId,
+    url: OUTSTREAM_RENDERER_URL,
+    loaded: false,
+    adUnitCode: bid.adUnitCode,
+  });
+
+  renderer.setRender(function (winningBid) {
+    winningBid.renderer.push(function () {
+      if (!window.ANOutstreamVideo) {
+        logWarn(`${BIDDER_CODE}: ANOutstreamVideo not loaded; cannot render outstream video bid`);
+        return;
+      }
+      window.ANOutstreamVideo.renderAd({
+        targetId: winningBid.adUnitCode,
+        adResponse: {
+          ad: {
+            video: {
+              content: winningBid.vastXml,
+              player_width: winningBid.playerWidth || winningBid.width || 640,
+              player_height: winningBid.playerHeight || winningBid.height || 480,
+            },
+          },
+        },
+      });
+    });
+  });
+
+  bid.renderer = renderer;
+}
 
 export const spec = {
   code: BIDDER_CODE,
@@ -60,22 +115,35 @@ export const spec = {
       logWarn(`${BIDDER_CODE}: bid missing required params.accountId`, bid);
       return false;
     }
+    if (!deepAccess(bid, 'params.placementId')) {
+      logWarn(`${BIDDER_CODE}: bid missing required params.placementId`, bid);
+      return false;
+    }
     return true;
   },
 
   buildRequests(validBidRequests, bidderRequest) {
     const data = converter.toORTB({ bidRequests: validBidRequests, bidderRequest });
 
+    // Site publisher — used by PBS to look up account configuration.
     const accountId = deepAccess(validBidRequests[0], 'params.accountId');
     if (accountId) {
       deepSetValue(data, 'site.publisher.id', accountId);
     }
 
-    // Passthrough carries no bidder hint. PBS resolves the winning bidder
-    // server-side from the stored request config. We preserve the passthrough
-    // object in case pbsExtensions wrote into it, but inject nothing bidder-specific.
+    // Top-level auction stored request — points at the account-level defaults
+    // (currency, price granularity, etc.). Set from params or ortb2.
+    const auctionStoredRequestId =
+      deepAccess(validBidRequests[0], 'params.auctionStoredRequestId') ||
+      deepAccess(bidderRequest, 'ortb2.ext.prebid.storedrequest.id');
+    if (auctionStoredRequestId) {
+      deepSetValue(data, 'ext.prebid.storedrequest.id', auctionStoredRequestId);
+    }
+
+    data.ext = data.ext || {};
+    data.ext.prebid = data.ext.prebid || {};
     data.ext.prebid.passthrough = {
-      ...data.ext.prebid.passthrough,
+      ...(data.ext.prebid.passthrough || {}),
       tpc: {},
     };
 
@@ -89,32 +157,59 @@ export const spec = {
   },
 
   interpretResponse(serverResponse, request) {
-    if (!serverResponse?.body) return [];
+    if (!serverResponse || !serverResponse.body) return [];
     const resp = deepClone(serverResponse.body);
 
     const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
 
-    // Build two lookup maps from the raw PBS seatbid array.
-    // seatMap keys by bid.id (primary); impSeatMap keys by impid (fallback).
-    // When allowUnknownBidderCodes is active the winning seat is an alternate
-    // bidder code (e.g. 'adform'). ortbConverter may leave bid.requestId null
-    // in that case, so we fall back through adUnitCode / transactionId.
+    // Build seat lookup maps so we can attribute each bid to its real seat
+    // for analytics. seatMap is keyed by bid.id, impSeatMap by impid as a fallback.
     const seatMap = {};
     const impSeatMap = {};
-    (resp.seatbid || []).forEach(function(sb) {
-      (sb.bid || []).forEach(function(b) {
+    (resp.seatbid || []).forEach(function (sb) {
+      (sb.bid || []).forEach(function (b) {
         seatMap[b.id] = sb.seat;
         impSeatMap[b.impid] = sb.seat;
       });
     });
 
-    bids.forEach(function(bid) {
-      const seat = seatMap[bid.requestId] ||
-                   impSeatMap[bid.adUnitCode] ||
-                   impSeatMap[bid.transactionId];
-      if (seat) {
-        deepSetValue(bid, 'meta.winningBidder', seat);
-        deepSetValue(bid, 'ext.tpc.winningBidder', seat);
+    // Per-bid options: read from the original bid request via the response context.
+    // useSourceBidderCode is read from the first matching bidRequest.
+    const useSourceBidderCode = (request.bidRequests || []).some(function (br) {
+      return deepAccess(br, 'params.useSourceBidderCode') === true;
+    });
+
+    bids.forEach(function (bid) {
+      const realSeat =
+        seatMap[bid.requestId] ||
+        impSeatMap[bid.adUnitCode] ||
+        impSeatMap[bid.transactionId];
+
+      // Preserve real seat name in TPC-specific meta field for analytics.
+      // bid.meta.adapterCode is already set by Prebid to the real seat name.
+      if (realSeat) {
+        bid.meta = bid.meta || {};
+        bid.meta.tpc = bid.meta.tpc || {};
+        bid.meta.tpc.realBidder = realSeat;
+      }
+
+      // Rewrite bidderCode to 'tpc' unless opted out via params.useSourceBidderCode.
+      // This keeps all targeting keys (hb_bidder, hb_pb_BIDDER) uniform under 'tpc'.
+      if (!useSourceBidderCode) {
+        bid.bidderCode = BIDDER_CODE;
+      }
+
+      // Outstream video bids need a renderer for Prebid validation to pass.
+      // ortbConverter sets bid.mediaType = 'video' for video responses.
+      // Outstream context comes from the original ad unit's mediaTypes.video.context.
+      if (bid.mediaType === VIDEO) {
+        const matchingBidRequest = (request.bidRequests || []).find(function (br) {
+          return br.adUnitCode === bid.adUnitCode;
+        });
+        const videoContext = deepAccess(matchingBidRequest, 'mediaTypes.video.context');
+        if (videoContext === 'outstream') {
+          attachOutstreamRenderer(bid);
+        }
       }
     });
 
@@ -124,13 +219,13 @@ export const spec = {
   getUserSyncs(syncOptions, serverResponses, gdprConsent, uspConsent, gppConsent) {
     if (!syncOptions.iframeEnabled && !syncOptions.pixelEnabled) return [];
 
-    // Derive the list of bidders to sync from ext.responsetimemillis keys.
-    // PBS populates this with one key per seat that responded, regardless of
-    // who won. This means all configured bidders in the stored request get
-    // synced — not just the winner — which maximises match rates across the pool.
+    // Derive bidder list from ext.responsetimemillis — one key per seat that
+    // responded. Syncs all configured bidders, not just the winner, to maximise
+    // match rates across the pool.
     let bidders = [];
-    serverResponses.forEach(({ body }) => {
-      Object.keys(body?.ext?.responsetimemillis || {}).forEach(b => {
+    serverResponses.forEach(function (resp) {
+      const rtm = (resp.body && resp.body.ext && resp.body.ext.responsetimemillis) || {};
+      Object.keys(rtm).forEach(function (b) {
         if (!bidders.includes(b)) bidders.push(b);
       });
     });
@@ -150,8 +245,8 @@ export const spec = {
       }
     }
     if (uspConsent) params.set('us_privacy', uspConsent);
-    if (gppConsent?.gppString) params.set('gpp', gppConsent.gppString);
-    if (Array.isArray(gppConsent?.applicableSections)) {
+    if (gppConsent && gppConsent.gppString) params.set('gpp', gppConsent.gppString);
+    if (Array.isArray(gppConsent && gppConsent.applicableSections)) {
       params.set('gpp_sid', gppConsent.applicableSections.join(','));
     }
 
@@ -167,10 +262,11 @@ export const spec = {
     if (bid.burl) triggerPixel(bid.burl);
   },
 
-  onBidderError({ error }) {
-    if (error.status === 400 && error.responseText) {
+  onBidderError(args) {
+    const error = args && args.error;
+    if (error && error.status === 400 && error.responseText) {
       const match = error.responseText.match(/found for id: (.*)/);
-      if (match?.[1]) {
+      if (match && match[1]) {
         logError(`${BIDDER_CODE}: account '${match[1]}' not found. Please verify your accountId.`, error);
         return;
       }
