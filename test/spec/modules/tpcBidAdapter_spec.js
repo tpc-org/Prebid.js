@@ -151,6 +151,56 @@ const buildRequest = (params = {}) => {
   return spec.buildRequests([bidRequest], BIDDER_REQUEST);
 };
 
+// ─── Video / outstream fixtures ──────────────────────────────────────────────
+
+const VIDEO_BID_ID = 'video-bid-789';
+const VIDEO_ADUNIT_CODE = 'tpc-hola-video';
+const VAST_XML = '<VAST version="2.0"><Ad id="1"><InLine><AdTitle>Test</AdTitle><Creatives><Creative><Linear><MediaFiles><MediaFile type="video/mp4" delivery="progressive">https://example.com/ad.mp4</MediaFile></MediaFiles></Linear></Creative></Creatives></InLine></Ad></VAST>';
+
+const VIDEO_BID_REQUEST = {
+  ...BID_REQUEST,
+  adUnitCode: VIDEO_ADUNIT_CODE,
+  bidId: VIDEO_BID_ID,
+  mediaTypes: {
+    video: {
+      context: 'outstream',
+      playerSize: [[640, 480]],
+      mimes: ['video/mp4'],
+    }
+  }
+};
+
+const VIDEO_BIDDER_REQUEST = {
+  ...BIDDER_REQUEST,
+  bids: [VIDEO_BID_REQUEST],
+};
+
+const VIDEO_BID_RESPONSE = {
+  seatbid: [{
+    bid: [{
+      id: VIDEO_BID_ID,
+      impid: VIDEO_BID_ID,
+      price: 2.0,
+      adm: VAST_XML,
+      adomain: ['example.com'],
+      crid: 'video-crid-123',
+      w: 640,
+      h: 480,
+      exp: 300,
+      mtype: 2,
+      ext: { prebid: { type: 'video' } }
+    }],
+    seat: 'adform',
+    group: 0,
+  }],
+  cur: 'USD',
+  ext: {
+    responsetimemillis: { adform: 45 },
+    tmaxrequest: 900,
+    prebid: { auctiontimestamp: 1678646619765, passthrough: { tpc: {} } }
+  }
+};
+
 describe('TPC Bid Adapter', function () {
   // ─── isBidRequestValid ──────────────────────────────────────────────────────
 
@@ -289,6 +339,14 @@ describe('TPC Bid Adapter', function () {
       expect(body.bidders).to.include('magnite');
     });
 
+    // credentials: 'include' is required so the browser sends and updates the
+    // uids cookie cross-origin. Without it PBS returns no_cookie: true.
+    it('sends the request with credentials: include for cross-origin cookie handling', () => {
+      spec.getUserSyncs({ iframeEnabled: true }, [{ body: BID_RESPONSE }]);
+      const opts = fetchStub.firstCall.args[1];
+      expect(opts.credentials).to.equal('include');
+    });
+
     it('includes GDPR consent params in the POST body', () => {
       spec.getUserSyncs(
         { iframeEnabled: true },
@@ -305,6 +363,62 @@ describe('TPC Bid Adapter', function () {
       spec.getUserSyncs({ pixelEnabled: true }, [{ body: BID_RESPONSE }], null, '1YNN', null);
       const body = JSON.parse(fetchStub.firstCall.args[1].body);
       expect(body.us_privacy).to.equal('1YNN');
+    });
+  });
+
+  // ─── interpretResponse — outstream renderer ──────────────────────────────────
+
+  describe('interpretResponse — outstream renderer', () => {
+    let renderAdStub;
+    const videoRequest = spec.buildRequests([VIDEO_BID_REQUEST], VIDEO_BIDDER_REQUEST);
+
+    beforeEach(() => {
+      renderAdStub = sinon.stub();
+      window.tpc = { video: { renderAd: renderAdStub } };
+    });
+
+    afterEach(() => {
+      delete window.tpc;
+    });
+
+    it('attaches a renderer to an outstream video bid', () => {
+      const [bid] = spec.interpretResponse({ body: VIDEO_BID_RESPONSE }, videoRequest);
+      expect(bid.renderer).to.exist;
+    });
+
+    it('renderer URL points at the TPC hosted video player', () => {
+      const [bid] = spec.interpretResponse({ body: VIDEO_BID_RESPONSE }, videoRequest);
+      expect(bid.renderer.url).to.include('s3.tpcsrv.com');
+    });
+
+    // Verifies the render function passes vastXml and targetId to window.tpc.video.renderAd.
+    // bid.adUnitCode is set by Prebid's auction manager before rendering; set manually here.
+    // bid.vastXml is set by the ortbConverter video processor (requires FEATURES.VIDEO at
+    // build time, which is disabled in this test env); set manually here to test render logic.
+    // renderer.loaded = true makes push() fire synchronously without loading the external script.
+    it('renderer calls window.tpc.video.renderAd with vastXml and targetId', () => {
+      const [bid] = spec.interpretResponse({ body: VIDEO_BID_RESPONSE }, videoRequest);
+      bid.adUnitCode = VIDEO_ADUNIT_CODE;
+      bid.vastXml = VAST_XML;
+      bid.renderer.loaded = true;
+      bid.renderer._render(bid);
+      expect(renderAdStub.calledOnce).to.be.true;
+      const args = renderAdStub.firstCall.args[0];
+      expect(args.targetId).to.equal(VIDEO_ADUNIT_CODE);
+      expect(args.adResponse.ad.video.content).to.equal(VAST_XML);
+    });
+
+    it('does not attach a renderer to an instream video bid', () => {
+      const instreamBidRequest = {
+        ...VIDEO_BID_REQUEST,
+        mediaTypes: { video: { context: 'instream', playerSize: [[640, 480]] } }
+      };
+      const instreamRequest = spec.buildRequests(
+        [instreamBidRequest],
+        { ...VIDEO_BIDDER_REQUEST, bids: [instreamBidRequest] }
+      );
+      const [bid] = spec.interpretResponse({ body: VIDEO_BID_RESPONSE }, instreamRequest);
+      expect(bid.renderer).to.be.undefined;
     });
   });
 });
