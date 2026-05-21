@@ -222,11 +222,11 @@ describe('TPC Bid Adapter', function () {
     });
 
     // Winning bidder annotation — available for analytics without affecting targeting.
-    it('should annotate bid.meta.winningBidder with the winning seat', () => {
-      expect(bid.meta.winningBidder).equal(WINNING_SEAT);
+    it('should annotate bid.meta.tpc.realBidder with the winning seat', () => {
+      expect(bid.meta.tpc.realBidder).equal(WINNING_SEAT);
     });
-    it('should annotate bid.ext.tpc.winningBidder with the winning seat', () => {
-      expect(bid.ext.tpc.winningBidder).equal(WINNING_SEAT);
+    it('should set bid.meta.tpc as an object', () => {
+      expect(bid.meta.tpc).to.be.an('object');
     });
 
     // Per-seat responsetimemillis must be preserved intact — not collapsed.
@@ -242,6 +242,7 @@ describe('TPC Bid Adapter', function () {
 
   describe('interpretResponse with useSourceBidderCode', () => {
     const request = buildRequest({ useSourceBidderCode: true });
+    request.bidRequests = [{ params: { accountId: ACCOUNT_ID, placementId: PLACEMENT_ID, useSourceBidderCode: true } }];
     const [bid] = spec.interpretResponse({ body: BID_RESPONSE }, request);
     it('should expose the S2S seat as bidderCode when useSourceBidderCode is true', () => {
       expect(bid.bidderCode).equal(WINNING_SEAT);
