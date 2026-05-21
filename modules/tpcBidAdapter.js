@@ -242,6 +242,7 @@ export const spec = {
     // pixels/iframes directly — getUserSyncs must return synchronously.
     fetch(USER_SYNC_ENDPOINT, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
