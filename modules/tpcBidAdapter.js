@@ -5,7 +5,7 @@ import { Renderer } from '../src/Renderer.js';
 import { BANNER, VIDEO, NATIVE } from '../src/mediaTypes.js';
 import {
   deepAccess, deepSetValue, deepClone,
-  logWarn, logError, triggerPixel, shuffle
+  logWarn, logError, triggerPixel
 } from '../src/utils.js';
 
 /**
@@ -45,9 +45,7 @@ import {
 
 const BIDDER_CODE = 'tpc';
 const PBS_ENDPOINT = 'https://pbs.tpcsrv.com/openrtb2/auction';
-const USER_SYNC_ENDPOINT = 'https://pbs.tpcsrv.com/cookie_sync';
 const OUTSTREAM_RENDERER_URL = 'https://acdn.adnxs.com/video/outstream/ANOutstreamVideo.js';
-const MAX_SYNC_COUNT = 10;
 
 const converter = ortbConverter({
   processors: pbsExtensions,
@@ -217,45 +215,10 @@ export const spec = {
     return bids;
   },
 
-  getUserSyncs(syncOptions, serverResponses, gdprConsent, uspConsent, gppConsent) {
-    if (!syncOptions.iframeEnabled && !syncOptions.pixelEnabled) return [];
-
-    // Derive bidder list from ext.responsetimemillis — one key per seat that
-    // responded. Syncs all configured bidders, not just the winner, to maximise
-    // match rates across the pool.
-    let bidders = [];
-    serverResponses.forEach(function (resp) {
-      const rtm = (resp.body && resp.body.ext && resp.body.ext.responsetimemillis) || {};
-      Object.keys(rtm).forEach(function (b) {
-        if (!bidders.includes(b)) bidders.push(b);
-      });
-    });
-
-    if (!bidders.length) return [];
-
-    bidders = shuffle(bidders).slice(0, MAX_SYNC_COUNT);
-
-    const params = new URLSearchParams();
-    params.set('bidders', bidders.join(','));
-    params.set('max_sync_count', MAX_SYNC_COUNT);
-
-    if (gdprConsent) {
-      params.set('gdpr', gdprConsent.gdprApplies ? '1' : '0');
-      if (gdprConsent.consentString) {
-        params.set('gdpr_consent', gdprConsent.consentString);
-      }
-    }
-    if (uspConsent) params.set('us_privacy', uspConsent);
-    if (gppConsent && gppConsent.gppString) params.set('gpp', gppConsent.gppString);
-    if (Array.isArray(gppConsent && gppConsent.applicableSections)) {
-      params.set('gpp_sid', gppConsent.applicableSections.join(','));
-    }
-
-    const syncUrl = `${USER_SYNC_ENDPOINT}?${params.toString()}`;
-    if (syncOptions.iframeEnabled) {
-      return [{ type: 'iframe', url: syncUrl }];
-    }
-    return [{ type: 'image', url: syncUrl }];
+  getUserSyncs() {
+    // PBS cookie_sync is a POST endpoint — returning it as a GET pixel/iframe
+    // causes 405. PBS handles bidder syncing server-side; no client syncs needed.
+    return [];
   },
 
   onBidWon(bid) {

@@ -1,5 +1,4 @@
 import { spec } from 'modules/tpcBidAdapter.js';
-import { parseUrl } from 'src/utils.js';
 
 const expect = require('chai').expect;
 
@@ -250,93 +249,14 @@ describe('TPC Bid Adapter', function () {
   });
 
   // ─── getUserSyncs ────────────────────────────────────────────────────────────
+  // PBS cookie_sync is a POST-only endpoint; returning it as a GET pixel/iframe
+  // causes 405. PBS handles bidder syncing server-side, so getUserSyncs is a no-op.
 
-  describe('getUserSyncs — multi-seat sync', () => {
-    // getUserSyncs should sync ALL seats that responded (both appnexus and magnite),
-    // not just the winner. This maximises match rates across the full bidder pool
-    // configured in the stored request.
-    const allSyncs = spec.getUserSyncs(
-      { iframeEnabled: true },
-      [{ body: BID_RESPONSE }],
-      null, null, null
-    );
-    const [{ url, type }] = allSyncs;
-    const parsed = parseUrl(url);
-
-    it('should return a single sync object', () => {
-      expect(allSyncs.length).equal(1);
-    });
-    it('should use iframe sync type', () => {
-      expect(type).equal('iframe');
-    });
-    it('should sync to the cookie_sync endpoint', () => {
-      expect(parsed.hostname).equal(PBS_HOST);
-      expect(parsed.pathname).equal('/cookie_sync');
-    });
-    it('should include all responding seats in the bidders param', () => {
-      const syncedBidders = parsed.search.bidders.split(',');
-      expect(syncedBidders).to.include('appnexus');
-      expect(syncedBidders).to.include('magnite');
-    });
-  });
-
-  describe('getUserSyncs with pixelEnabled only', () => {
-    const allSyncs = spec.getUserSyncs(
-      { iframeEnabled: false, pixelEnabled: true },
-      [{ body: BID_RESPONSE }],
-      null, null, null
-    );
-    it('should return a pixel sync when iframe is not enabled', () => {
-      expect(allSyncs.length).equal(1);
-      expect(allSyncs[0].type).equal('image');
-    });
-  });
-
-  describe('getUserSyncs with no sync options enabled', () => {
-    const allSyncs = spec.getUserSyncs(
-      { iframeEnabled: false, pixelEnabled: false },
-      [{ body: BID_RESPONSE }],
-      null, null, null
-    );
-    it('should return an empty array', () => {
-      expect(allSyncs).to.deep.equal([]);
-    });
-  });
-
-  describe('getUserSyncs with no bidders in response', () => {
-    const allSyncs = spec.getUserSyncs(
-      { iframeEnabled: true },
-      [{ body: {} }],
-      null, null, null
-    );
-    it('should return an empty array when no bidders responded', () => {
-      expect(allSyncs).to.deep.equal([]);
-    });
-  });
-
-  describe('getUserSyncs with consent signals', () => {
-    const gdprConsent = { gdprApplies: true, consentString: 'abc123' };
-    const uspConsent = '1YNN';
-    const gppConsent = { gppString: 'gpp_str', applicableSections: [7, 8] };
-    const [{ url }] = spec.getUserSyncs(
-      { iframeEnabled: true },
-      [{ body: BID_RESPONSE }],
-      gdprConsent,
-      uspConsent,
-      gppConsent
-    );
-    const { search } = parseUrl(url);
-
-    it('should include GDPR params', () => {
-      expect(search.gdpr).equal('1');
-      expect(search.gdpr_consent).equal('abc123');
-    });
-    it('should include US Privacy param', () => {
-      expect(search.us_privacy).equal('1YNN');
-    });
-    it('should include GPP params', () => {
-      expect(search.gpp).equal('gpp_str');
-      expect(search.gpp_sid).equal('7,8');
+  describe('getUserSyncs', () => {
+    it('should always return an empty array', () => {
+      expect(spec.getUserSyncs({ iframeEnabled: true }, [{ body: BID_RESPONSE }])).to.deep.equal([]);
+      expect(spec.getUserSyncs({ pixelEnabled: true }, [{ body: BID_RESPONSE }])).to.deep.equal([]);
+      expect(spec.getUserSyncs({ iframeEnabled: false, pixelEnabled: false }, [])).to.deep.equal([]);
     });
   });
 });
