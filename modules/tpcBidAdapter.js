@@ -23,9 +23,8 @@ import {
  * name is preserved in bid.meta.adapterCode (Prebid standard) and
  * bid.meta.tpc.realBidder (TPC explicit, for analytics).
  *
- * Outstream video bids get an interim outstream renderer attached
- * (AppNexus's ANOutstreamVideo). Workstream 2 replaces this with a TPC-hosted
- * video.js renderer.
+ * Outstream video bids get a renderer attached that delegates to window.tpc.video,
+ * loaded from https://s3.tpcsrv.com/prod/video.js (TPC-hosted, VAST + VPAID).
  *
  * --- Bid params ---
  * accountId            (required) TPC account UUID
@@ -46,7 +45,7 @@ import {
 const BIDDER_CODE = 'tpc';
 const PBS_ENDPOINT = 'https://pbs.tpcsrv.com/openrtb2/auction';
 const USER_SYNC_ENDPOINT = 'https://pbs.tpcsrv.com/cookie_sync';
-const OUTSTREAM_RENDERER_URL = 'https://acdn.adnxs.com/video/outstream/ANOutstreamVideo.js';
+const OUTSTREAM_RENDERER_URL = 'https://s3.tpcsrv.com/prod/video.js';
 const MAX_SYNC_COUNT = 10;
 
 const converter = ortbConverter({
@@ -69,10 +68,6 @@ const converter = ortbConverter({
   },
 });
 
-/**
- * Attach the interim outstream renderer to a video bid.
- * Workstream 2 replaces ANOutstreamVideo with a TPC-hosted video.js bundle.
- */
 function attachOutstreamRenderer(bid) {
   const renderer = Renderer.install({
     id: bid.adId,
@@ -83,11 +78,11 @@ function attachOutstreamRenderer(bid) {
 
   renderer.setRender(function (winningBid) {
     winningBid.renderer.push(function () {
-      if (!window.ANOutstreamVideo) {
-        logWarn(`${BIDDER_CODE}: ANOutstreamVideo not loaded; cannot render outstream video bid`);
+      if (!window.tpc || !window.tpc.video) {
+        logWarn(`${BIDDER_CODE}: window.tpc.video not loaded; cannot render outstream video bid`);
         return;
       }
-      window.ANOutstreamVideo.renderAd({
+      window.tpc.video.renderAd({
         targetId: winningBid.adUnitCode,
         adResponse: {
           ad: {
