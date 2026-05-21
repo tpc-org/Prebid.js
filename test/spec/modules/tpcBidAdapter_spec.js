@@ -249,14 +249,62 @@ describe('TPC Bid Adapter', function () {
   });
 
   // ─── getUserSyncs ────────────────────────────────────────────────────────────
-  // PBS cookie_sync is a POST-only endpoint; returning it as a GET pixel/iframe
-  // causes 405. PBS handles bidder syncing server-side, so getUserSyncs is a no-op.
+  // PBS cookie_sync is POST-only. getUserSyncs fires an async POST and injects
+  // resulting sync pixels/iframes directly; it always returns [] synchronously.
 
   describe('getUserSyncs', () => {
-    it('should always return an empty array', () => {
+    let fetchStub;
+    const emptyCookieSyncResponse = { json: () => Promise.resolve({ bidder_status: [] }) };
+
+    beforeEach(() => {
+      fetchStub = sinon.stub(window, 'fetch').resolves(emptyCookieSyncResponse);
+    });
+
+    afterEach(() => {
+      fetchStub.restore();
+    });
+
+    it('always returns an empty array synchronously', () => {
       expect(spec.getUserSyncs({ iframeEnabled: true }, [{ body: BID_RESPONSE }])).to.deep.equal([]);
-      expect(spec.getUserSyncs({ pixelEnabled: true }, [{ body: BID_RESPONSE }])).to.deep.equal([]);
-      expect(spec.getUserSyncs({ iframeEnabled: false, pixelEnabled: false }, [])).to.deep.equal([]);
+    });
+
+    it('does not fetch when both sync options are disabled', () => {
+      spec.getUserSyncs({ iframeEnabled: false, pixelEnabled: false }, [{ body: BID_RESPONSE }]);
+      expect(fetchStub.called).to.be.false;
+    });
+
+    it('does not fetch when no bidders are in the response', () => {
+      spec.getUserSyncs({ iframeEnabled: true }, [{ body: {} }]);
+      expect(fetchStub.called).to.be.false;
+    });
+
+    it('POSTs to the cookie_sync endpoint with all responding bidders', () => {
+      spec.getUserSyncs({ iframeEnabled: true }, [{ body: BID_RESPONSE }], null, null, null);
+      expect(fetchStub.calledOnce).to.be.true;
+      const [url, opts] = fetchStub.firstCall.args;
+      expect(url).to.include('/cookie_sync');
+      expect(opts.method).to.equal('POST');
+      const body = JSON.parse(opts.body);
+      expect(body.bidders).to.include('appnexus');
+      expect(body.bidders).to.include('magnite');
+    });
+
+    it('includes GDPR consent params in the POST body', () => {
+      spec.getUserSyncs(
+        { iframeEnabled: true },
+        [{ body: BID_RESPONSE }],
+        { gdprApplies: true, consentString: 'abc123' },
+        null, null
+      );
+      const body = JSON.parse(fetchStub.firstCall.args[1].body);
+      expect(body.gdpr).to.equal(1);
+      expect(body.gdpr_consent).to.equal('abc123');
+    });
+
+    it('includes US Privacy param in the POST body', () => {
+      spec.getUserSyncs({ pixelEnabled: true }, [{ body: BID_RESPONSE }], null, '1YNN', null);
+      const body = JSON.parse(fetchStub.firstCall.args[1].body);
+      expect(body.us_privacy).to.equal('1YNN');
     });
   });
 });

@@ -5,7 +5,7 @@ import { Renderer } from '../src/Renderer.js';
 import { BANNER, VIDEO, NATIVE } from '../src/mediaTypes.js';
 import {
   deepAccess, deepSetValue, deepClone,
-  logWarn, logError, triggerPixel
+  logWarn, logError, triggerPixel, shuffle
 } from '../src/utils.js';
 
 /**
@@ -45,7 +45,9 @@ import {
 
 const BIDDER_CODE = 'tpc';
 const PBS_ENDPOINT = 'https://pbs.tpcsrv.com/openrtb2/auction';
+const USER_SYNC_ENDPOINT = 'https://pbs.tpcsrv.com/cookie_sync';
 const OUTSTREAM_RENDERER_URL = 'https://acdn.adnxs.com/video/outstream/ANOutstreamVideo.js';
+const MAX_SYNC_COUNT = 10;
 
 const converter = ortbConverter({
   processors: pbsExtensions,
@@ -203,7 +205,7 @@ export const spec = {
       // Outstream context comes from the original ad unit's mediaTypes.video.context.
       if (bid.mediaType === VIDEO) {
         const matchingBidRequest = (request.bidRequests || []).find(function (br) {
-          return br.adUnitCode === bid.adUnitCode;
+          return br.adUnitCode === bid.adUnitCode || br.bidId === bid.requestId;
         });
         const videoContext = deepAccess(matchingBidRequest, 'mediaTypes.video.context');
         if (videoContext === 'outstream') {
@@ -215,9 +217,56 @@ export const spec = {
     return bids;
   },
 
-  getUserSyncs() {
-    // PBS cookie_sync is a POST endpoint — returning it as a GET pixel/iframe
-    // causes 405. PBS handles bidder syncing server-side; no client syncs needed.
+  getUserSyncs(syncOptions, serverResponses, gdprConsent, uspConsent, gppConsent) {
+    if (!syncOptions.iframeEnabled && !syncOptions.pixelEnabled) return [];
+
+    let bidders = [];
+    serverResponses.forEach(function (resp) {
+      const rtm = (resp.body && resp.body.ext && resp.body.ext.responsetimemillis) || {};
+      Object.keys(rtm).forEach(function (b) {
+        if (!bidders.includes(b)) bidders.push(b);
+      });
+    });
+
+    if (!bidders.length) return [];
+
+    bidders = shuffle(bidders).slice(0, MAX_SYNC_COUNT);
+
+    const body = { bidders, limit: MAX_SYNC_COUNT, coopSync: false };
+    if (gdprConsent) {
+      body.gdpr = gdprConsent.gdprApplies ? 1 : 0;
+      if (gdprConsent.consentString) body.gdpr_consent = gdprConsent.consentString;
+    }
+    if (uspConsent) body.us_privacy = uspConsent;
+    if (gppConsent && gppConsent.gppString) body.gpp = gppConsent.gppString;
+    if (Array.isArray(gppConsent && gppConsent.applicableSections)) {
+      body.gpp_sid = gppConsent.applicableSections.join(',');
+    }
+
+    // PBS cookie_sync is POST-only; fire async and inject resulting sync
+    // pixels/iframes directly — getUserSyncs must return synchronously.
+    fetch(USER_SYNC_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(data => {
+        (data.bidder_status || []).forEach(function (bs) {
+          if (!bs.usersync || !bs.usersync.url) return;
+          const type = bs.usersync.type;
+          if (type === 'iframe' && syncOptions.iframeEnabled) {
+            const iframe = document.createElement('iframe');
+            iframe.src = bs.usersync.url;
+            iframe.style.cssText = 'display:none;width:0;height:0;border:0;';
+            document.body.appendChild(iframe);
+          } else if ((type === 'redirect' || type === 'image') && syncOptions.pixelEnabled) {
+            triggerPixel(bs.usersync.url);
+          }
+        });
+      })
+      .catch(function () {});
+
     return [];
   },
 
