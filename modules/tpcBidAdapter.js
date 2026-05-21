@@ -153,6 +153,7 @@ export const spec = {
       method: 'POST',
       url: PBS_ENDPOINT,
       data,
+      bidRequests: validBidRequests,
     };
   },
 
