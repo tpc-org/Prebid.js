@@ -57,13 +57,21 @@ const converter = ortbConverter({
 
   imp(buildImp, bidRequest, context) {
     const imp = buildImp(bidRequest, context);
-    const { placementId } = bidRequest.params;
+    const { placementId, thrads } = bidRequest.params;
 
     // Map placementId → PBS stored imp. PBS loads the full bidder configuration
     // server-side from this id, so the client sends no bidder-specific params.
     if (placementId) {
       deepSetValue(imp, 'ext.prebid.storedrequest.id', placementId);
     }
+
+    // Forward dynamic Thrad params (userId, chatId, messages) so PBS can pass
+    // them to the thrads adapter. PBS merges these with the stored imp's static
+    // thrads params before calling the adapter.
+    if (thrads && typeof thrads === 'object') {
+      deepSetValue(imp, 'ext.prebid.bidder.thrads', thrads);
+    }
+
     return imp;
   },
 });
