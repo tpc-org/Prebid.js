@@ -57,7 +57,7 @@ const converter = ortbConverter({
 
   imp(buildImp, bidRequest, context) {
     const imp = buildImp(bidRequest, context);
-    const { placementId, thrad } = bidRequest.params;
+    const { placementId, thrad, gravity } = bidRequest.params;
 
     // Map placementId → PBS stored imp. PBS loads the full bidder configuration
     // server-side from this id, so the client sends no bidder-specific params.
@@ -70,6 +70,12 @@ const converter = ortbConverter({
     // thrad params before calling the adapter.
     if (thrad && typeof thrad === 'object') {
       deepSetValue(imp, 'ext.prebid.bidder.thrad', thrad);
+    }
+
+    // Forward dynamic Gravity params (userId, sessionId, messages) so PBS can
+    // pass them to the gravity adapter alongside the stored imp's static params.
+    if (gravity && typeof gravity === 'object') {
+      deepSetValue(imp, 'ext.prebid.bidder.gravity', gravity);
     }
 
     return imp;
