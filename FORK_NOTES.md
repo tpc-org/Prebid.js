@@ -58,6 +58,19 @@ git push origin upstream-pr/<short-description>
 fork-only files leak into upstream PRs (which the script in step 3
 will catch).
 
+## Pulling upstream changes into this fork
+
+The opposite direction from the workflow above. Full procedure,
+including a real production near-miss from the 2026-08-18 sync (caught
+before merging, thanks to a lesson learned the hard way on the
+`prebid-server` sync that same day) is in `tpc-org/docs`'s
+`runbooks/upstream-sync.md` — **read it before syncing**. The one thing
+worth repeating here: merging to `master` **immediately and
+automatically deploys to every live client bundle** via
+`dispatch-deployment.yml` (see below) — there is no separate "deploy"
+step to gate on, so all verification (including an actual browser-load
+check, not just `gulp test`) has to happen *before* merging, not after.
+
 ## How this fork relates to the rest of the TPC stack
 
 The Prebid.js fork is one of four repos that make up the TPC ad serving
