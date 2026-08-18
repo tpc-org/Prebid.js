@@ -3,7 +3,10 @@ import { deepAccess, deepSetValue } from '../src/utils.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
 import { ortbConverter } from '../libraries/ortbConverter/converter.js';
 import { ajax } from '../src/ajax.js';
-import { config } from '../src/config.js';
+
+export const dep = {
+  ajax
+};
 
 type AdelerateBidParams = {
   placementId: string;
@@ -147,7 +150,7 @@ function interpretResponse(serverResponse, request) {
   return (result as { bids: any[] }).bids;
 }
 
-function getUserSyncs(syncOptions, serverResponses, gdprConsent, uspConsent, gppConsent) {
+function getUserSyncs(syncOptions, serverResponses, gdprConsent, uspConsent, gppConsent, coppa) {
   const params = [];
 
   if (gdprConsent) {
@@ -168,7 +171,7 @@ function getUserSyncs(syncOptions, serverResponses, gdprConsent, uspConsent, gpp
     params.push(`gpp_sid=${gppConsent.applicableSections.join(',')}`);
   }
 
-  if (config.getConfig('coppa') === true) {
+  if (coppa) {
     params.push('coppa=1');
   }
 
@@ -189,7 +192,7 @@ function onTimeout(data) {
   if (!data || !data.length) {
     return;
   }
-  ajax(`${EVENTS_ENDPOINT}/timeout`, undefined, JSON.stringify(data), {
+  dep.ajax(`${EVENTS_ENDPOINT}/timeout`, undefined, JSON.stringify(data), {
     method: 'POST',
     keepalive: true,
     withCredentials: true,
@@ -200,7 +203,7 @@ function onBidWon(bid) {
   if (!bid) {
     return;
   }
-  ajax(`${EVENTS_ENDPOINT}/win`, undefined, JSON.stringify({
+  dep.ajax(`${EVENTS_ENDPOINT}/win`, undefined, JSON.stringify({
     requestId: bid.requestId,
     adId: bid.adId,
     cpm: bid.cpm,
@@ -215,7 +218,7 @@ function onBidWon(bid) {
 
 function onBidderError(args) {
   const { error, bidderRequest } = args || {};
-  ajax(`${EVENTS_ENDPOINT}/error`, undefined, JSON.stringify({
+  dep.ajax(`${EVENTS_ENDPOINT}/error`, undefined, JSON.stringify({
     error: error?.status,
     bidderCode: BIDDER_CODE,
     auctionId: bidderRequest?.auctionId,
