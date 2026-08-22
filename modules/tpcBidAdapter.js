@@ -57,7 +57,7 @@ const converter = ortbConverter({
 
   imp(buildImp, bidRequest, context) {
     const imp = buildImp(bidRequest, context);
-    const { placementId, thrad, gravity } = bidRequest.params;
+    const { placementId, thrad, gravity, imprezia } = bidRequest.params;
 
     // Map placementId → PBS stored imp. PBS loads the full bidder configuration
     // server-side from this id, so the client sends no bidder-specific params.
@@ -76,6 +76,19 @@ const converter = ortbConverter({
     // pass them to the gravity adapter alongside the stored imp's static params.
     if (gravity && typeof gravity === 'object') {
       deepSetValue(imp, 'ext.prebid.bidder.gravity', gravity);
+    }
+
+    // Forward dynamic Imprezia params (request, response, userId, sessionId)
+    // so PBS can pass them to the imprezia adapter alongside the stored imp's
+    // static siteId/placementId. Without this, params.imprezia stays nested
+    // under ext.prebid.bidder.tpc.imprezia (this adapter's own params blob)
+    // instead of the top-level ext.prebid.bidder.imprezia key the PBS
+    // imprezia adapter actually reads — a real production bug (2026-08-22,
+    // learnrithm): every real browser auction hit "imprezia: request is
+    // required" because the dynamic half never reached the top level, same
+    // pattern as Thrad/Gravity above.
+    if (imprezia && typeof imprezia === 'object') {
+      deepSetValue(imp, 'ext.prebid.bidder.imprezia', imprezia);
     }
 
     return imp;

@@ -250,6 +250,48 @@ describe('TPC Bid Adapter', function () {
     });
   });
 
+  // ─── Dynamic bidder param forwarding (thrad/gravity/imprezia) ───────────────
+  //
+  // params.thrad / params.gravity / params.imprezia are injected per-auction
+  // by client bundles (prebid-deployments) to carry dynamic per-request state
+  // (userId, sessionId, conversation messages, imprezia's request/response)
+  // alongside PBS's own static Stored Imp config for that bidder. These must
+  // land at the TOP-LEVEL ext.prebid.bidder.<code> key that each PBS adapter
+  // actually reads from — not just inside this adapter's own
+  // ext.prebid.bidder.tpc params blob, which no other PBS adapter looks at.
+  // Real production incident, 2026-08-22 (learnrithm): params.imprezia was
+  // never forwarded here at all — it landed only under bidder.tpc.imprezia
+  // — so every real browser auction failed with "imprezia: request is
+  // required" despite the client bundle sending the correct params. No test
+  // caught it because this forwarding logic (for any of the three bidders)
+  // had no coverage at all until this block.
+  describe('dynamic bidder param forwarding', () => {
+    it('should forward params.thrad to the top-level ext.prebid.bidder.thrad', () => {
+      const thrad = { userId: 'u1', chatId: 'c1', messages: [{ role: 'user', content: 'hi' }] };
+      const { data } = buildRequest({ thrad });
+      expect(data.imp[0].ext.prebid.bidder.thrad).to.deep.equal(thrad);
+    });
+
+    it('should forward params.gravity to the top-level ext.prebid.bidder.gravity', () => {
+      const gravity = { userId: 'u1', sessionId: 's1' };
+      const { data } = buildRequest({ gravity });
+      expect(data.imp[0].ext.prebid.bidder.gravity).to.deep.equal(gravity);
+    });
+
+    it('should forward params.imprezia to the top-level ext.prebid.bidder.imprezia', () => {
+      const imprezia = { request: 'hello', response: ' ', userId: 'u1', sessionId: 's1' };
+      const { data } = buildRequest({ imprezia });
+      expect(data.imp[0].ext.prebid.bidder.imprezia).to.deep.equal(imprezia);
+    });
+
+    it('should not set ext.prebid.bidder.thrad/gravity/imprezia when their params are absent', () => {
+      const { data } = buildRequest();
+      expect(data.imp[0].ext.prebid.bidder.thrad).to.be.undefined;
+      expect(data.imp[0].ext.prebid.bidder.gravity).to.be.undefined;
+      expect(data.imp[0].ext.prebid.bidder.imprezia).to.be.undefined;
+    });
+  });
+
   // ─── interpretResponse ──────────────────────────────────────────────────────
 
   describe('interpretResponse', () => {
