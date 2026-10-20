@@ -186,7 +186,12 @@ export const spec = {
     const bids = converter.fromORTB({ response: resp, request: request.data }).bids;
 
     // Build seat lookup maps so we can attribute each bid to its real seat
-    // for analytics. seatMap is keyed by bid.id, impSeatMap by impid as a fallback.
+    // for analytics. seatMap is keyed by the OpenRTB bid.id, which the ORTB
+    // converter carries over as bid.seatBidId; impSeatMap is keyed by impid,
+    // which the converter maps to bid.requestId — the fallback when a bid
+    // has no seatBidId. (Previously looked up by requestId/adUnitCode, which
+    // only matched when a bidder's bid id equalled the imp id — never true
+    // for Thrad, so realBidder was missing on every Thrad bid.)
     const seatMap = {};
     const impSeatMap = {};
     (resp.seatbid || []).forEach(function (sb) {
@@ -204,9 +209,8 @@ export const spec = {
 
     bids.forEach(function (bid) {
       const realSeat =
-        seatMap[bid.requestId] ||
-        impSeatMap[bid.adUnitCode] ||
-        impSeatMap[bid.transactionId];
+        (bid.seatBidId != null && seatMap[bid.seatBidId]) ||
+        impSeatMap[bid.requestId];
 
       // Preserve real seat name in TPC-specific meta field for analytics.
       // bid.meta.adapterCode is already set by Prebid to the real seat name.
