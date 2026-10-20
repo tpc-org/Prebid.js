@@ -1,4 +1,5 @@
 import { spec } from 'modules/tpcBidAdapter.js';
+import { deepClone } from 'src/utils.js';
 
 const expect = require('chai').expect;
 
@@ -318,6 +319,32 @@ describe('TPC Bid Adapter', function () {
     });
     it('should set bid.meta.tpc as an object', () => {
       expect(bid.meta.tpc).to.be.an('object');
+    });
+
+    // Thrad (and most real bidders) send their own bid ids, not the imp id.
+    // The fixture above has id === impid, which hid a lookup bug that left
+    // realBidder unset for every such bid.
+    it('should annotate realBidder when the bid id differs from the imp id', () => {
+      const resp = deepClone(BID_RESPONSE);
+      resp.seatbid[0].seat = 'thrad';
+      resp.seatbid[0].bid[0].id = 'test_a618bd218c1c4b9c9b56b77e6ef99838';
+      const [thradBid] = spec.interpretResponse({ body: resp }, buildRequest());
+      expect(thradBid.meta.tpc.realBidder).equal('thrad');
+    });
+
+    it('should attribute each bid to its own seat when several seats bid on one imp', () => {
+      const resp = deepClone(BID_RESPONSE);
+      const other = deepClone(resp.seatbid[0]);
+      other.seat = 'imprezia';
+      other.bid[0].id = 'imprezia-bid-1';
+      other.bid[0].price = 0.5;
+      resp.seatbid[0].bid[0].id = 'appnexus-bid-1';
+      resp.seatbid.push(other);
+      const bids = spec.interpretResponse({ body: resp }, buildRequest());
+      expect(bids.map(b => [b.cpm, b.meta.tpc.realBidder])).to.deep.equal([
+        [1.5, WINNING_SEAT],
+        [0.5, 'imprezia'],
+      ]);
     });
 
     // Per-seat responsetimemillis must be preserved intact — not collapsed.
