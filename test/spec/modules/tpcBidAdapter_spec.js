@@ -1,5 +1,7 @@
 import { spec } from 'modules/tpcBidAdapter.js';
 import { deepClone } from 'src/utils.js';
+import * as utils from 'src/utils.js';
+import sinon from 'sinon';
 
 const expect = require('chai').expect;
 
@@ -488,6 +490,24 @@ describe('TPC Bid Adapter', function () {
       );
       const [bid] = spec.interpretResponse({ body: VIDEO_BID_RESPONSE }, instreamRequest);
       expect(bid.renderer).to.be.undefined;
+    });
+  });
+
+  describe('onBidWon', () => {
+    let triggerPixelStub;
+    beforeEach(() => { triggerPixelStub = sinon.stub(utils, 'triggerPixel'); });
+    afterEach(() => { triggerPixelStub.restore(); });
+
+    it('fires pbsWurl', () => {
+      spec.onBidWon({ pbsWurl: 'https://pbs.example/event?t=win' });
+      expect(triggerPixelStub.calledOnceWith('https://pbs.example/event?t=win')).to.equal(true);
+    });
+
+    // Prebid core fires burl once on render (triggerBilling). Firing it here
+    // as well sent every burl twice.
+    it('does not fire burl', () => {
+      spec.onBidWon({ burl: 'https://ssp.thrad.ai/api/v2/auction/win?token=x' });
+      expect(triggerPixelStub.called).to.equal(false);
     });
   });
 });
