@@ -297,9 +297,13 @@ export const spec = {
     return [];
   },
 
+  // burl is NOT fired here: Prebid core already fires it once per rendered
+  // bid (adapterManager.triggerBilling, from addWinningBid). Firing it here
+  // too sent every burl twice — confirmed live 2026-10-26 on Thrad v2, whose
+  // burl is the win notice Thrad wants exactly once (and v1 Thrad's burl is
+  // its view pixel, which was double-counted the same way).
   onBidWon(bid) {
     if (bid.pbsWurl) triggerPixel(bid.pbsWurl);
-    if (bid.burl) triggerPixel(bid.burl);
   },
 
   onBidderError(args) {
