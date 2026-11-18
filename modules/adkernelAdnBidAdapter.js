@@ -1,8 +1,8 @@
-import { deepAccess, deepSetValue, isArray, isNumber, isStr, logInfo, parseSizesInput } from '../src/utils.js';
+import { deepSetValue, isArray, isNumber, isStr, logInfo, parseSizesInput } from '../src/utils.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, VIDEO } from '../src/mediaTypes.js';
-import { config } from '../src/config.js';
 import { getBidFloor } from '../libraries/adkernelUtils/adkernelUtils.js';
+import { coppaDataHandler } from '../src/consentHandler.js';
 
 const DEFAULT_ADKERNEL_DSP_DOMAIN = 'tag.adkernel.com';
 const DEFAULT_MIMES = ['video/mp4', 'video/webm', 'application/x-shockwave-flash', 'application/javascript'];
@@ -20,8 +20,8 @@ function buildImp(bidRequest) {
     tagid: bidRequest.adUnitCode
   };
   let mediaType;
-  const bannerReq = deepAccess(bidRequest, `mediaTypes.banner`);
-  const videoReq = deepAccess(bidRequest, `mediaTypes.video`);
+  const bannerReq = bidRequest?.mediaTypes?.banner;
+  const videoReq = bidRequest?.mediaTypes?.video;
   if (bannerReq) {
     const sizes = canonicalizeSizesArray(bannerReq.sizes);
     imp.banner = {
@@ -78,7 +78,7 @@ function buildRequestParams(tags, bidderRequest) {
   if (uspConsent) {
     deepSetValue(req, 'user.us_privacy', uspConsent);
   }
-  if (config.getConfig('coppa')) {
+  if ((bidderRequest?.ortb2?.regs?.coppa === 1 || coppaDataHandler.getCoppa())) {
     deepSetValue(req, 'user.coppa', 1);
   }
   return req;

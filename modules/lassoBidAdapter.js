@@ -122,9 +122,9 @@ export const spec = {
       ad: response.bid.ad,
       mediaType: response.bid.mediaType,
       meta: {
-        secondaryCatIds: response.bid.cat,
-        advertiserDomains: response.bid.advertiserDomains,
-        advertiserName: response.meta.advertiserName,
+        secondaryCatIds: response.meta?.cat || response.bid.cat,
+        advertiserDomains: response.meta?.advertiserDomains || response.bid.advertiserDomains,
+        advertiserName: response.meta?.advertiserName,
         mediaType: response.bid.mediaType
       }
     };
@@ -165,12 +165,11 @@ function getBidRequestUrl(aimXR, params) {
 }
 
 function getDeviceData() {
-  const win = window.top;
   const winDimensions = getWinDimensions();
   return {
     ua: navigator.userAgent,
-    width: winDimensions.innerWidth || winDimensions.document.documentElement.clientWidth || win.document.body.clientWidth,
-    height: winDimensions.innerHeight || winDimensions.document.documentElement.clientHeight || win.document.body.clientHeight,
+    width: winDimensions.innerWidth || winDimensions.document.documentElement.clientWidth || winDimensions.document.body.clientWidth,
+    height: winDimensions.innerHeight || winDimensions.document.documentElement.clientHeight || winDimensions.document.body.clientHeight,
     browserLanguage: navigator.language,
   };
 }

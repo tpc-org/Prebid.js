@@ -524,6 +524,7 @@ describe('unicornBidAdapterTest', () => {
     });
     it('buildBidRequest', () => {
       const req = spec.buildRequests(validBidRequests, bidderRequest);
+      assert.strictEqual(req.url, 'https://ds.uncn.jp/pb/0/bid.json');
       const uid = JSON.parse(req.data)['user']['id'];
       const reqData = removeUntestableAttrs(JSON.parse(req.data));
       const openRTBRequestData = removeUntestableAttrs(openRTBRequest);
@@ -631,9 +632,10 @@ describe('unicornBidAdapterTest', () => {
       sandbox = sinon.createSandbox();
       sandbox.stub(percentInViewLib, 'getViewportOffset').returns({ x: 0, y: 0 });
       winDimensionsStub = sandbox.stub(winDimensionsLib, 'getWinDimensions').returns({
+        scrollX: 0,
+        scrollY: 0,
         document: {
-          documentElement: { scrollLeft: 0, scrollTop: 0, clientHeight: VH },
-          body: { scrollLeft: 0, scrollTop: 0 }
+          documentElement: { clientHeight: VH }
         }
       });
       origGoogletag = window.googletag;
@@ -662,9 +664,10 @@ describe('unicornBidAdapterTest', () => {
       // rect.top alone looks "above the fold", but a large scroll offset
       // means the slot's real page position is well past one viewport height.
       winDimensionsStub.returns({
+        scrollX: 0,
+        scrollY: 5000,
         document: {
-          documentElement: { scrollLeft: 0, scrollTop: 5000, clientHeight: VH },
-          body: { scrollLeft: 0, scrollTop: 0 }
+          documentElement: { clientHeight: VH }
         }
       });
       makeSlotEl('adslot-2', { top: 50, left: 0, width: 300, height: 250 });
