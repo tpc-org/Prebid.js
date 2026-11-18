@@ -19,6 +19,10 @@ import { percentInView } from '../libraries/percentInView/percentInView.js';
 import { getBoundingClientRect } from '../libraries/boundingClientRect/boundingClientRect.js';
 import { getAdUnitElement } from '../src/utils/adUnits.js';
 
+/**
+ * @typedef {import('./taboolaBidAdapter.d.ts').TaboolaBidParams} TaboolaBidParams
+ */
+
 const BIDDER_CODE = 'taboola';
 const GVLID = 42;
 const CURRENCY = 'USD';
@@ -134,9 +138,18 @@ export function getPageVisibility() {
   }
 }
 
+export function getUserInteractionSignals() {
+  try {
+    return window.TRC?.getCtx?.();
+  } catch (e) {
+    return undefined;
+  }
+}
+
 export function getDeviceExtSignals(existingExt = {}) {
   const viewport = getViewportCoordinates();
-  return {
+  const bs = getUserInteractionSignals();
+  const ext = {
     ...existingExt,
     bot: detectBot(),
     visibility: getPageVisibility(),
@@ -145,6 +158,12 @@ export function getDeviceExtSignals(existingExt = {}) {
       left: Math.round(viewport.left)
     }
   };
+  if (bs) {
+    ext.bs = bs;
+  } else {
+    delete ext.bs;
+  }
+  return ext;
 }
 
 export function getElementSignals(bidRequest) {
@@ -262,20 +281,15 @@ export const spec = {
     return bids;
   },
   onBidWon: (bid) => {
-    if (bid.nurl && !bid.deferBilling) {
+    if (bid.nurl) {
       const resolvedNurl = replaceAuctionPrice(bid.nurl, bid.originalCpm);
-      ajax(resolvedNurl);
-      bid.taboolaBillingFired = true;
+      ajax(resolvedNurl, null, null, { keepalive: true });
     }
   },
   onBidBillable: (bid) => {
-    if (bid.taboolaBillingFired) {
-      return;
-    }
-    const billingUrl = bid.burl || bid.nurl;
-    if (billingUrl) {
-      const resolvedBillingUrl = replaceAuctionPrice(billingUrl, bid.originalCpm);
-      ajax(resolvedBillingUrl);
+    if (bid.burl) {
+      const resolvedBurl = replaceAuctionPrice(bid.burl, bid.originalCpm);
+      ajax(resolvedBurl, null, null, { keepalive: true });
     }
   },
   getUserSyncs: function(syncOptions, serverResponses, gdprConsent, uspConsent, gppConsent) {
@@ -351,7 +365,7 @@ function getSiteProperties({ publisherId }, refererInfo, ortb2) {
       id: publisherId
     },
     content: {
-      language: navigator.language
+      language: ortb2?.site?.content?.language || navigator.language
     }
   };
 }
@@ -379,10 +393,11 @@ function fillTaboolaReqData(bidderRequest, bidRequest, data, context) {
   if (extractedUserId && extractedUserId !== 0) {
     deepSetValue(data, 'user.buyeruid', extractedUserId);
   }
-  if (data.regs?.ext === undefined || data.regs?.ext === null) {
-    data.regs = {
-      ext: {}
-    };
+  if (data.regs === undefined || data.regs === null) {
+    data.regs = {};
+  }
+  if (data.regs.ext === undefined || data.regs.ext === null) {
+    data.regs.ext = {};
   }
   deepSetValue(data, 'regs.coppa', 0);
   if (gdprConsent.gdprApplies) {
@@ -402,11 +417,7 @@ function fillTaboolaReqData(bidderRequest, bidRequest, data, context) {
     deepSetValue(data, 'regs.coppa', 1);
   }
 
-  const ortb2 = bidderRequest.ortb2 || {
-    bcat: [],
-    badv: [],
-    wlang: []
-  };
+  const ortb2 = bidderRequest.ortb2 || {};
 
   deepSetValue(data, 'source.fd', 1);
 

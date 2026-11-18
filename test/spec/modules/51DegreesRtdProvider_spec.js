@@ -15,9 +15,10 @@ import {
   getPageFodErrors,
   storageManager,
   fiftyOneDegreesSubmodule,
+  MODEL_TERMS_URL,
 } from 'modules/51DegreesRtdProvider';
 import { mergeDeep } from '../../../src/utils.js';
-import { loadExternalScriptStub } from 'test/mocks/adloaderStub.js';
+import { fetchExternalScriptStub } from 'test/mocks/adloaderStub.js';
 
 const inject51DegreesMeta = () => {
   const meta = document.createElement('meta');
@@ -484,7 +485,7 @@ describe('51DegreesRtdProvider', function() {
       const result = convert51DegreesDataToOrtb2(data51, { tdlUrl: 'https://tdl.example/x' });
       expect(result.user.eids).to.have.lengthOf(1);
       expect(result.user.eids[0].uids).to.deep.equal([{ id: 'lic-uid', atype: 1 }, { id: 'global-uid', atype: 1 }]);
-      expect(result.user.eids[0].ext.tdl).to.deep.equal(['https://tdl.example/x']);
+      expect(result.user.eids[0].ext.tdl).to.deep.equal([MODEL_TERMS_URL, 'https://tdl.example/x']);
     });
 
     it('returns only device mapping when ip and fodid are absent', function () {
@@ -782,16 +783,32 @@ describe('51DegreesRtdProvider', function() {
             source: '51d.es',
             mm: 5,
             uids: [{ id: 'lic-uid-base64', atype: 1 }, { id: 'global-uid-base64', atype: 1 }],
-            ext: { tdl: [TDL_URL] },
+            ext: { tdl: [MODEL_TERMS_URL, TDL_URL] },
           }],
         },
       });
     });
 
-    it('omits ext.tdl when tdlUrl is falsy', function() {
+    it('names the Model Terms alone when tdlUrl is falsy', function() {
       const result = convert51DegreesFoDiDToOrtb2(fullFodid, undefined);
-      expect(result.user.eids[0].ext).to.be.undefined;
+      expect(result.user.eids[0].ext.tdl).to.deep.equal([MODEL_TERMS_URL]);
       expect(result.user.eids[0].uids).to.deep.equal([{ id: 'lic-uid-base64', atype: 1 }, { id: 'global-uid-base64', atype: 1 }]);
+    });
+
+    it('names the Model Terms first and the publisher TDL second', function() {
+      const result = convert51DegreesFoDiDToOrtb2(fullFodid, TDL_URL);
+      expect(result.user.eids[0].ext.tdl).to.deep.equal([MODEL_TERMS_URL, TDL_URL]);
+    });
+
+    it('gives every entry its own terms array', function() {
+      const result = convert51DegreesFoDiDToOrtb2({
+        idproblic: 'p-lic',
+        idrandlic: 'r-lic',
+      }, TDL_URL);
+      expect(result.user.eids).to.have.lengthOf(2);
+      expect(result.user.eids[0].ext.tdl).to.not.equal(result.user.eids[1].ext.tdl);
+      result.user.eids[0].ext.tdl.push('https://elsewhere.example/y');
+      expect(result.user.eids[1].ext.tdl).to.deep.equal([MODEL_TERMS_URL, TDL_URL]);
     });
 
     it('emits entry with only idproblic when idprobglobal is absent', function() {
@@ -846,7 +863,8 @@ describe('51DegreesRtdProvider', function() {
       expect(result.user.eids).to.have.lengthOf(3);
       expect(result.user.eids.map((e) => e.mm)).to.deep.equal([5, 0, 3]);
       expect(result.user.eids.every((e) => e.source === '51d.es')).to.equal(true);
-      expect(result.user.eids.every((e) => e.ext.tdl[0] === TDL_URL)).to.equal(true);
+      expect(result.user.eids.every((e) => e.ext.tdl[0] === MODEL_TERMS_URL)).to.equal(true);
+      expect(result.user.eids.every((e) => e.ext.tdl[1] === TDL_URL)).to.equal(true);
       expect(result.user.eids[2].uids).to.deep.equal(
         [{ id: 'h-lic', atype: 3 }, { id: 'h-global', atype: 3 }]);
     });
@@ -1004,16 +1022,9 @@ describe('51DegreesRtdProvider', function() {
       delete window.fod;
       // Loading the module's own script creates window.fod, so mirror that
       // in the stub to make the script path behave like a real load.
-      loadExternalScriptStub.callsFake((url, moduleType, moduleName, callback) => {
+      fetchExternalScriptStub.callsFake(() => {
         window.fod = { complete: (cb) => cb(fiftyOneDegreesData) };
-        // Mirror adloader's runCallback: a bare function is the success
-        // callback, the object form gets success() or error().
-        if (typeof callback === 'function') {
-          callback();
-        } else {
-          callback?.success?.();
-        }
-        return document.createElement('script');
+        return Promise.resolve();
       });
     });
 
@@ -1102,7 +1113,7 @@ describe('51DegreesRtdProvider', function() {
       expect(reqBidsConfigObj.ortb2Fragments.global.user.eids[0].uids)
         .to.deep.equal([{ id: 'lic-uid', atype: 1 }, { id: 'global-uid', atype: 1 }]);
       expect(reqBidsConfigObj.ortb2Fragments.global.user.eids[0].ext.tdl)
-        .to.deep.equal(['https://tdl.example/x']);
+        .to.deep.equal([MODEL_TERMS_URL, 'https://tdl.example/x']);
     });
 
     it('does not overwrite a publisher-set device.ip / device.ipv6', async function() {
@@ -1130,8 +1141,8 @@ describe('51DegreesRtdProvider', function() {
       getBidRequestData(reqBidsConfigObj, callback, moduleConfig, userConsent);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      expect(loadExternalScriptStub.called).to.be.true;
-      const scriptUrl = loadExternalScriptStub.getCall(0).args[0];
+      expect(fetchExternalScriptStub.called).to.be.true;
+      const scriptUrl = fetchExternalScriptStub.getCall(0).args[0];
       expect(scriptUrl).to.include('tcstring=TCSTRINGVAL');
       expect(scriptUrl).to.include('gppstring=GPPSTRINGVAL');
     });
@@ -1142,7 +1153,7 @@ describe('51DegreesRtdProvider', function() {
         fodid: { idproblic: 'lic-uid', idhemlic: 'hem-lic-uid', idhemglobal: 'hem-global-uid' },
       };
       window.fod = { complete: (cb) => cb(data51) };
-      loadExternalScriptStub.resetHistory();
+      fetchExternalScriptStub.resetHistory();
 
       const callback = sinon.spy();
       const moduleConfig = { params: { tdlUrl: 'https://tdl.example/x' } };
@@ -1151,7 +1162,7 @@ describe('51DegreesRtdProvider', function() {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       expect(callback.calledOnce).to.be.true;
-      expect(loadExternalScriptStub.called).to.be.false;
+      expect(fetchExternalScriptStub.called).to.be.false;
       const eids = reqBidsConfigObj.ortb2Fragments.global.user.eids;
       expect(eids).to.have.lengthOf(2);
       expect(eids[1].mm).to.equal(3);
@@ -1160,7 +1171,7 @@ describe('51DegreesRtdProvider', function() {
     it('prefers the on-page integration over a configured resourceKey', async function() {
       const data51 = { device: fiftyOneDegreesDevice };
       window.fod = { complete: (cb) => cb(data51) };
-      loadExternalScriptStub.resetHistory();
+      fetchExternalScriptStub.resetHistory();
 
       const callback = sinon.spy();
       const moduleConfig = { params: { resourceKey: 'INVALID_RESOURCE_KEY' } };
@@ -1169,7 +1180,7 @@ describe('51DegreesRtdProvider', function() {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       expect(callback.calledOnce).to.be.true;
-      expect(loadExternalScriptStub.called).to.be.false;
+      expect(fetchExternalScriptStub.called).to.be.false;
       expect(reqBidsConfigObj.ortb2Fragments.global.device.make).to.equal('Apple');
     });
 
@@ -1180,7 +1191,7 @@ describe('51DegreesRtdProvider', function() {
       getBidRequestData(reqBidsConfigObj, callback, moduleConfig, {});
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      expect(loadExternalScriptStub.called).to.be.true;
+      expect(fetchExternalScriptStub.called).to.be.true;
       expect(callback.calledOnce).to.be.true;
     });
 
@@ -1190,7 +1201,7 @@ describe('51DegreesRtdProvider', function() {
 
       getBidRequestData(reqBidsConfigObj, callback, moduleConfig, {});
       await new Promise(resolve => setTimeout(resolve, 100));
-      expect(loadExternalScriptStub.calledOnce).to.be.true;
+      expect(fetchExternalScriptStub.calledOnce).to.be.true;
       expect(callback.calledOnce).to.be.true;
 
       // window.fod is now the object the module's own load created, so the
@@ -1200,10 +1211,10 @@ describe('51DegreesRtdProvider', function() {
       getBidRequestData(reqBidsConfigObj, callback2, moduleConfig, { gdpr: { consentString: 'NEWTC' } });
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      expect(loadExternalScriptStub.calledTwice).to.be.true;
+      expect(fetchExternalScriptStub.calledTwice).to.be.true;
       expect(callback2.calledOnce).to.be.true;
       // The reload is only useful if the new consent actually reaches the cloud.
-      expect(loadExternalScriptStub.secondCall.args[0]).to.include('tcstring=NEWTC');
+      expect(fetchExternalScriptStub.secondCall.args[0]).to.include('tcstring=NEWTC');
     });
 
     it('drops the cached 51Degrees response only when consent changes', async function() {
@@ -1233,10 +1244,9 @@ describe('51DegreesRtdProvider', function() {
     });
 
     it('calls the callback when its own script leaves an fod with neither complete() nor errors', async function() {
-      loadExternalScriptStub.callsFake((url, moduleType, moduleName, callback) => {
+      fetchExternalScriptStub.callsFake(() => {
         window.fod = {};
-        callback.success();
-        return document.createElement('script');
+        return Promise.resolve();
       });
 
       const callback = sinon.spy();
@@ -1247,7 +1257,7 @@ describe('51DegreesRtdProvider', function() {
     });
 
     it('calls the callback when injecting the script throws', async function() {
-      loadExternalScriptStub.callsFake(() => {
+      fetchExternalScriptStub.callsFake(() => {
         throw new Error('injection blew up');
       });
 
@@ -1292,10 +1302,9 @@ describe('51DegreesRtdProvider', function() {
     it('calls the callback when its own script leaves an fod without complete()', async function() {
       // What the cloud serves for a rejected resource key: a script body that
       // defines fod.errors and nothing else.
-      loadExternalScriptStub.callsFake((url, moduleType, moduleName, callback) => {
+      fetchExternalScriptStub.callsFake(() => {
         window.fod = { errors: ["The resource key 'BAD' could not be found."] };
-        callback.success();
-        return document.createElement('script');
+        return Promise.resolve();
       });
 
       const callback = sinon.spy();
@@ -1306,10 +1315,7 @@ describe('51DegreesRtdProvider', function() {
     });
 
     it('calls the callback when its own script fails to load', async function() {
-      loadExternalScriptStub.callsFake((url, moduleType, moduleName, callback) => {
-        callback.error(new Error('network'));
-        return document.createElement('script');
-      });
+      fetchExternalScriptStub.rejects(new Error('network'));
 
       const callback = sinon.spy();
       getBidRequestData(reqBidsConfigObj, callback, { params: { resourceKey: 'KEY' } }, {});
@@ -1319,8 +1325,7 @@ describe('51DegreesRtdProvider', function() {
     });
 
     it('calls the callback when activity controls deny the script load', async function() {
-      // A denied load returns undefined and invokes neither callback.
-      loadExternalScriptStub.callsFake(() => undefined);
+      fetchExternalScriptStub.rejects(new Error('Denied'));
 
       const callback = sinon.spy();
       getBidRequestData(reqBidsConfigObj, callback, { params: { resourceKey: 'KEY' } }, {});

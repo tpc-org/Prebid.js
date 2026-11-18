@@ -1,13 +1,13 @@
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { getStorageManager } from '../src/storageManager.js';
 import { BANNER, VIDEO } from '../src/mediaTypes.js';
-import { config } from '../src/config.js';
-import { deepAccess, isArray, isNumber, isPlainObject } from '../src/utils.js';
+import { deepAccess, isArray } from '../src/utils.js';
 import { auctionManager } from '../src/auctionManager.js';
 import { getANKeywordParam } from '../libraries/appnexusUtils/anKeywords.js';
-import { convertCamelToUnderscore } from '../libraries/appnexusUtils/anUtils.js';
+import { convertUserParams } from '../libraries/appnexusUtils/anUtils.js';
 import { transformSizes } from '../libraries/sizeUtils/tranformSize.js';
 import { addUserId, hasUserInfo, getBidFloor } from '../libraries/adrelevantisUtils/bidderUtils.js';
+import { coppaDataHandler } from '../src/consentHandler.js';
 
 const SOURCE = 'pbjs';
 const storageManager = getStorageManager({ bidderCode: 'pixfuture' });
@@ -57,29 +57,12 @@ export const spec = {
 
       const userObjBid = (validBidRequests || []).find(hasUserInfo);
       let userObj = {};
-      if (config.getConfig('coppa') === true) {
+      if ((bidderRequest?.ortb2?.regs?.coppa === 1 || coppaDataHandler.getCoppa())) {
         userObj = { coppa: true };
       }
 
       if (userObjBid) {
-        Object.keys(userObjBid.params.user)
-          .filter(param => USER_PARAMS.includes(param))
-          .forEach((param) => {
-            const uparam = convertCamelToUnderscore(param);
-            if (param === 'segments' && isArray(userObjBid.params.user[param])) {
-              const segs = [];
-              userObjBid.params.user[param].forEach(val => {
-                if (isNumber(val)) {
-                  segs.push({ id: val });
-                } else if (isPlainObject(val)) {
-                  segs.push(val);
-                }
-              });
-              userObj[uparam] = segs;
-            } else if (param !== 'segments') {
-              userObj[uparam] = userObjBid.params.user[param];
-            }
-          });
+        Object.assign(userObj, convertUserParams(userObjBid.params.user, USER_PARAMS));
       }
 
       const schain = validBidRequests[0]?.ortb2?.source?.ext?.schain;

@@ -6,18 +6,13 @@
 import { getAllAssetsMessage, getAssetMessage } from './native.js';
 import { BID_STATUS, MESSAGES } from './constants.js';
 import { isApnGetTagDefined, isGptPubadsDefined, logError, logWarn } from './utils.js';
-import {
-  deferRendering,
-  handleCreativeEvent,
-  handleNativeMessage,
-  handleRender,
-  markWinner
-} from './adRendering.js';
+import { deferRendering, handleCreativeEvent, handleNativeMessage, handleRender, markWinner } from './adRendering.js';
 import { getCreativeRendererSource, PUC_MIN_VERSION } from './creativeRenderers.js';
 import { PbPromise } from './utils/promise.js';
 import { getAdUnitElement } from './utils/adUnits.js';
 import { auctionManager } from './auctionManager.js';
-import { getSlotTargetingKeys, getSlotTargeting } from './utils/gptTargeting.js';
+import { findSlotElementIdByAdId, getSlotTargeting, getSlotTargetingKeys } from './utils/gptTargeting.js';
+import { hook } from './hook.js';
 
 const { REQUEST, RESPONSE, NATIVE, EVENT } = MESSAGES;
 
@@ -62,17 +57,41 @@ function ensureAdId(adId, reply) {
   };
 }
 
-export function receiveMessage(ev, cb) {
-  var key = ev.message ? 'message' : 'data';
-  var data;
+export function parseMessage(ev) {
+  const key = ev.message ? 'message' : 'data';
+  let data;
   try {
     data = JSON.parse(ev[key]);
   } catch (e) {
     return;
   }
-
   if (data && data.adId && data.message && HANDLER_MAP.hasOwnProperty(data.message)) {
-    HANDLER_MAP[data.message](ensureAdId(data.adId, getReplier(ev)), data, auctionManager.findBidByAdId(data.adId));
+    return data;
+  }
+}
+
+export const getBidForMessage = (() => {
+  const bids = new WeakMap();
+  return (message) => {
+    if (message == null || typeof message !== 'object') return;
+    if (bids.get(message)?.adId !== message.adId) {
+      const bid = auctionManager.findBidByAdId(message.adId);
+      bid == null ? bids.delete(message) : bids.set(message, bid);
+    }
+    return bids.get(message);
+  };
+})();
+
+export const isMessageAllowed = hook('sync', (event, data) => true);
+
+export function processMessage(data, bid, replier) {
+  HANDLER_MAP.hasOwnProperty(data.message) && HANDLER_MAP[data.message](ensureAdId(data.adId, replier), data, bid);
+}
+
+export function receiveMessage(ev, cb) {
+  const data = parseMessage(ev);
+  if (data && isMessageAllowed(ev, data)) {
+    processMessage(data, getBidForMessage(data), getReplier(ev));
     cb && cb();
   }
 }
@@ -85,6 +104,7 @@ function getResizer(adId, bidResponse) {
     resizeRemoteCreative({ ...bidResponse, width, height, adId });
   };
 }
+
 function handleRenderRequest(reply, message, bidResponse) {
   handleRender({
     renderFn(adData) {
@@ -210,6 +230,10 @@ export function resizeRemoteCreative({ instl, element, adId, adUnitCode, width, 
   }
 
   function getDfpElementId(adId) {
+    const dfpId = findSlotElementIdByAdId(adId);
+    if (dfpId) {
+      return dfpId;
+    }
     const slot = window.googletag.pubads().getSlots().find(slot => {
       return getSlotTargetingKeys(slot).find(key => {
         return getSlotTargeting(slot, key).includes(adId);

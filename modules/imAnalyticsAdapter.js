@@ -116,7 +116,8 @@ function extractMetaFields(meta) {
 
 // IM Analytics Adapter implementation
 const imAnalyticsAdapter = Object.assign(
-  adapter({ analyticsType: 'endpoint' }),
+  // track only updates the cache, or sends with sendBeacon
+  adapter({ analyticsType: 'endpoint', flushOnPageHide: true }),
   {
     /**
      * Track Prebid.js events
@@ -314,7 +315,8 @@ imAnalyticsAdapter.disableAnalytics = function() {
 
 adapterManager.registerAnalyticsAdapter({
   adapter: imAnalyticsAdapter,
-  code: 'imAnalytics'
+  code: 'imAnalytics',
+  acpId: 2279 // Google Additional Consent provider ID
 });
 
 export default imAnalyticsAdapter;

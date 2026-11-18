@@ -289,6 +289,15 @@ describe('config API', function () {
     expect(config.runWithBidder('mockBidder', () => config.getConfig('bidderSequence'))).to.eql('fixed');
   });
 
+  it('restores the outer bidder after a nested runWithBidder', () => {
+    const seen = config.runWithBidder('outer', () => {
+      config.runWithBidder('inner', () => null);
+      return config.getCurrentBidder();
+    });
+    expect(seen).to.eql('outer');
+    expect(config.getCurrentBidder()).to.be.null;
+  });
+
   it('sets deviceAccess', function () {
     // When the deviceAccess flag config option is not set, cookies may be read and set
     expect(getConfig('deviceAccess')).to.be.equal(true);
@@ -351,6 +360,25 @@ describe('config API', function () {
     };
     setConfig({ auctionOptions: auctionOptionsConfig });
     expect(getConfig('auctionOptions')).to.eql(auctionOptionsConfig);
+  });
+
+  it('sets auctionOptions viewabilityMeasurement', function () {
+    const auctionOptionsConfig = {
+      'viewabilityMeasurement': 'boundingBox'
+    };
+    setConfig({ auctionOptions: auctionOptionsConfig });
+    expect(getConfig('auctionOptions')).to.eql(auctionOptionsConfig);
+  });
+
+  it('should log warning for invalid auctionOptions viewabilityMeasurement', function () {
+    setConfig({
+      auctionOptions: {
+        'viewabilityMeasurement': 'nope',
+      }
+    });
+    expect(logWarnSpy.calledOnce).to.equal(true);
+    const warning = 'Auction Options viewabilityMeasurement must be one of: observer, boundingBox';
+    assert.ok(logWarnSpy.calledWith(warning), 'expected warning was logged');
   });
 
   it('should log warning for the wrong value passed to auctionOptions', function () {

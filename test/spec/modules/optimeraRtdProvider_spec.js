@@ -1,4 +1,5 @@
 import * as optimeraRTD from '../../../modules/optimeraRtdProvider.js';
+import { loadExternalScriptStub } from 'test/mocks/adloaderStub.js';
 
 const utils = require('src/utils.js');
 
@@ -40,7 +41,7 @@ describe('Optimera RTD score file URL is properly set for v0', () => {
     optimeraRTD.setScoresURL();
     optimeraRTD.setScores();
     expect(optimeraRTD.apiVersion).to.equal('v0');
-    expect(optimeraRTD.scoresURL).to.equal('https://dyv1bugovvq1g.cloudfront.net/9999/localhost%3A9876/context.html.js');
+    expect(optimeraRTD.scoresURL).to.equal(`https://dyv1bugovvq1g.cloudfront.net/9999/${encodeURIComponent(window.location.host)}/context.html.js`);
   });
 
   it('should properly set the score file URL without apiVersion set', () => {
@@ -58,7 +59,7 @@ describe('Optimera RTD score file URL is properly set for v0', () => {
     optimeraRTD.setScoresURL();
     optimeraRTD.setScores();
     expect(optimeraRTD.apiVersion).to.equal('v0');
-    expect(optimeraRTD.scoresURL).to.equal('https://dyv1bugovvq1g.cloudfront.net/9999/localhost%3A9876/context.html.js');
+    expect(optimeraRTD.scoresURL).to.equal(`https://dyv1bugovvq1g.cloudfront.net/9999/${encodeURIComponent(window.location.host)}/context.html.js`);
   });
 
   it('should properly set the score file URL with an api version other than v0 or v1', () => {
@@ -76,7 +77,7 @@ describe('Optimera RTD score file URL is properly set for v0', () => {
     optimeraRTD.init(conf.dataProviders[0]);
     optimeraRTD.setScoresURL();
     optimeraRTD.setScores();
-    expect(optimeraRTD.scoresURL).to.equal('https://dyv1bugovvq1g.cloudfront.net/9999/localhost%3A9876/context.html.js');
+    expect(optimeraRTD.scoresURL).to.equal(`https://dyv1bugovvq1g.cloudfront.net/9999/${encodeURIComponent(window.location.host)}/context.html.js`);
   });
 });
 
@@ -97,7 +98,7 @@ describe('Optimera RTD score file URL is properly set for v1', () => {
     optimeraRTD.setScoresURL();
     optimeraRTD.setScores();
     expect(optimeraRTD.apiVersion).to.equal('v1');
-    expect(optimeraRTD.scoresURL).to.equal('https://v1.oapi26b.com/api/products/scores?c=9999&h=localhost:9876&p=/context.html&s=de');
+    expect(optimeraRTD.scoresURL).to.equal(`https://v1.oapi26b.com/api/products/scores?c=9999&h=${window.location.host}&p=/context.html&s=de`);
   });
 });
 
@@ -274,5 +275,37 @@ describe('Optimera RTD injectOrtbScores', () => {
     optimeraRTD.injectOrtbScores(reqBidsConfigObj);
 
     expect(reqBidsConfigObj.adUnits[0].ortb2Imp.ext?.data?.optimera).to.be.undefined;
+  });
+});
+
+describe('Optimera RTD oPS script', () => {
+  function conf(params) {
+    return { name: 'optimeraRTD', params: Object.assign({ clientID: '9999' }, params) };
+  }
+
+  it('should default callOPS to false and not request the script', () => {
+    optimeraRTD.init(conf());
+    expect(optimeraRTD.callOPS).to.equal(false);
+    expect(loadExternalScriptStub.called).to.equal(false);
+  });
+
+  it('should not request the script when callOPS is false', () => {
+    optimeraRTD.init(conf({ callOPS: false }));
+    expect(optimeraRTD.callOPS).to.equal(false);
+    expect(loadExternalScriptStub.called).to.equal(false);
+  });
+
+  it('should request the oPS script and append it to the body when callOPS is true', () => {
+    optimeraRTD.init(conf({ callOPS: true }));
+    expect(optimeraRTD.callOPS).to.equal(true);
+    expect(loadExternalScriptStub.calledOnce).to.equal(true);
+    expect(loadExternalScriptStub.getCall(0).args[0]).to.equal('https://d15kdpgjg3unno.cloudfront.net/oPS.js?cid=9999');
+    expect(loadExternalScriptStub.getCall(0).args[5]).to.deep.equal({
+      id: 'optimera-ops',
+      'data-cid': '9999',
+    });
+    const script = loadExternalScriptStub.getCall(0).returnValue;
+    expect(script.parentNode).to.equal(document.body);
+    script.remove();
   });
 });

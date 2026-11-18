@@ -8,7 +8,9 @@ import {
   logInfo,
   safeJSONEncode,
   deepClone,
-  deepSetValue, getWindowTop
+  deepSetValue,
+  getWindowTop,
+  getWinDimensions
 } from '../src/utils.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { config } from '../src/config.js';
@@ -24,6 +26,7 @@ import { getGlobal } from '../src/prebidGlobal.js';
 import { getBoundingClientRect } from '../libraries/boundingClientRect/boundingClientRect.js';
 import { getMinSize } from '../libraries/sizeUtils/sizeUtils.js';
 import { getAdUnitElement } from '../src/utils/adUnits.js';
+import { coppaDataHandler } from '../src/consentHandler.js';
 
 /**
  * @typedef {import('../src/adapters/bidderFactory.js').BidRequest} BidRequest
@@ -168,7 +171,7 @@ function extParams(bidRequest, bidderRequests) {
   const windowSize = spec.getWindowSize();
   const gdprApplies = !!(gdpr && gdpr.gdprApplies);
   const uspApplies = !!(uspConsent);
-  const coppaApplies = !!(config.getConfig('coppa'));
+  const coppaApplies = bidderRequests?.ortb2?.regs?.coppa === 1 || coppaDataHandler.getCoppa();
   const { top = -1, right = -1, bottom = -1, left = -1 } = getViewportCoordinates();
   return Object.assign({},
     { customer_id: params.cid },
@@ -311,7 +314,7 @@ function getOverlapArea(topLeft1, bottomRight1, topLeft2, bottomRight2) {
 }
 
 function normalizeCoordinates(coordinates) {
-  const { scrollX, scrollY } = window;
+  const { scrollX, scrollY } = getWinDimensions(window);
   return {
     top_left: {
       x: coordinates.top_left.x + scrollX,

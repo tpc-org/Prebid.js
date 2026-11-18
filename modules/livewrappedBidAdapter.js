@@ -1,9 +1,10 @@
-import { deepAccess, getWindowTop, isSafariBrowser, isFirefoxBrowser, isChromeIOSBrowser, mergeDeep, isFn, isPlainObject, getWinDimensions } from '../src/utils.js';
+import { getWindowTop, isSafariBrowser, isFirefoxBrowser, isChromeIOSBrowser, mergeDeep, isFn, isPlainObject, getWinDimensions } from '../src/utils.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { config } from '../src/config.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
 import { getStorageManager } from '../src/storageManager.js';
 import { getCurrencyFromBidderRequest } from '../libraries/ortb2Utils/currency.js';
+import { coppaDataHandler } from '../src/consentHandler.js';
 
 /**
  * @typedef {import('../src/adapters/bidderFactory.js').BidRequest} BidRequest
@@ -94,7 +95,7 @@ export const spec = {
       version: VERSION,
       gdprApplies: bidderRequest.gdprConsent ? bidderRequest.gdprConsent.gdprApplies : undefined,
       gdprConsent: bidderRequest.gdprConsent ? bidderRequest.gdprConsent.consentString : undefined,
-      coppa: getCoppa(),
+      coppa: getCoppa(bidderRequest),
       usPrivacy: bidderRequest.uspConsent,
       cookieSupport: !isSafariBrowser() && !isFirefoxBrowser() && !isChromeIOSBrowser() && storage.cookiesAreEnabled(),
       rcv: getAdblockerRecovered(),
@@ -250,11 +251,11 @@ function bidToAdRequest(bid, currency) {
     adRequest.auc = bid.auc;
   }
 
-  adRequest.native = deepAccess(bid, 'mediaTypes.native');
+  adRequest.native = bid?.mediaTypes?.native;
 
-  adRequest.video = deepAccess(bid, 'mediaTypes.video');
+  adRequest.video = bid?.mediaTypes?.video;
 
-  if ((adRequest.native || adRequest.video) && deepAccess(bid, 'mediaTypes.banner')) {
+  if ((adRequest.native || adRequest.video) && bid?.mediaTypes?.banner) {
     adRequest.banner = true;
   }
 
@@ -262,7 +263,7 @@ function bidToAdRequest(bid, currency) {
 }
 
 function getSizes(bid) {
-  if (deepAccess(bid, 'mediaTypes.banner.sizes')) {
+  if (bid?.mediaTypes?.banner?.sizes) {
     return bid.mediaTypes.banner.sizes;
   } else if (Array.isArray(bid.sizes) && bid.sizes.length > 0) {
     return bid.sizes;
@@ -340,9 +341,7 @@ function getDeviceHeight() {
   return device.h || getWinDimensions().innerHeight;
 }
 
-function getCoppa() {
-  if (typeof config.getConfig('coppa') === 'boolean') {
-    return config.getConfig('coppa');
-  }
+function getCoppa(bidderRequest) {
+  return bidderRequest?.ortb2?.regs?.coppa === 1 || (coppaDataHandler.getCoppa() ? true : undefined);
 }
 registerBidder(spec);

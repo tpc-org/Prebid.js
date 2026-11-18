@@ -1,4 +1,4 @@
-import { deepAccess, deepSetValue, logError, logInfo, logWarn, parseUrl, triggerPixel } from '../src/utils.js';
+import { deepSetValue, logError, logInfo, logWarn, parseUrl, triggerPixel } from '../src/utils.js';
 import { registerBidder } from '../src/adapters/bidderFactory.js';
 import { BANNER, NATIVE, VIDEO } from '../src/mediaTypes.js';
 import { getStorageManager } from '../src/storageManager.js';
@@ -17,6 +17,8 @@ import { config } from '../src/config.js';
  * @typedef {import('../src/adapters/bidderFactory.js').ServerRequest} ServerRequest
  * @typedef {import('../src/adapters/bidderFactory.js').BidderSpec} BidderSpec
  * @typedef {import('../src/adapters/bidderFactory.js').TimedOutBid} TimedOutBid
+ * @typedef {import('./criteoBidAdapter.d.ts').CriteoBidderParams} CriteoBidderParams
+ * @typedef {BidRequest & {params: CriteoBidderParams}} CriteoBidRequest
  */
 
 const GVLID = 91;
@@ -260,6 +262,10 @@ export const spec = {
         version: '$prebid.version$'.replace(/\./g, '_'),
       };
 
+      function cleanupGumMessageHandler() {
+        window.removeEventListener('message', handleGumMessage, true);
+      }
+
       function handleGumMessage(event) {
         if (!event.data || event.origin !== 'https://gum.criteo.com') {
           return;
@@ -269,7 +275,7 @@ export const spec = {
           return;
         }
 
-        window.removeEventListener('message', handleGumMessage, true);
+        cleanupGumMessageHandler();
 
         event.stopImmediatePropagation();
 
@@ -288,14 +294,15 @@ export const spec = {
         }
       }
 
-      window.removeEventListener('message', handleGumMessage, true);
+      cleanupGumMessageHandler();
       window.addEventListener('message', handleGumMessage, true);
 
       const jsonHashSerialized = JSON.stringify(jsonHash).replace(/"/g, '%22');
 
       return [{
         type: 'iframe',
-        url: `https://gum.criteo.com/syncframe?${queryParams.join('&')}#${jsonHashSerialized}`
+        url: `https://gum.criteo.com/syncframe?${queryParams.join('&')}#${jsonHashSerialized}`,
+        onCleanup: cleanupGumMessageHandler
       }];
     } else if (syncOptions.pixelEnabled && hasPurpose1Consent(gdprConsent)) {
       const queryParams = [];
@@ -328,8 +335,8 @@ export const spec = {
   },
 
   /**
-   * f
-   * @param {object} bid
+   * Parameter typing added by the Codex bot as a follow-up to #15428.
+   * @param {CriteoBidRequest} bid
    * @return {boolean}
    */
   isBidRequestValid: (bid) => {
@@ -421,7 +428,7 @@ export const spec = {
 
 function getGzipSetting() {
   try {
-    const gzipSetting = deepAccess(config.getBidderConfig(), 'criteo.gzipEnabled');
+    const gzipSetting = config.getBidderConfig()?.criteo?.gzipEnabled;
 
     if (gzipSetting !== undefined) {
       const gzipValue = String(gzipSetting).toLowerCase().trim();
