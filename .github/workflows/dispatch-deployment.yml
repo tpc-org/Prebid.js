@@ -12,6 +12,10 @@ on:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    # DEPLOYMENTS_DISPATCH_TOKEN lives in this environment, which only master may use, so no other
+    # workflow or branch can read it (security review 2026-11-20).
+    environment: deploy-dispatch
+    permissions: {}
     steps:
       - name: Trigger deploy in tpc-org/prebid-deployments
         env:
