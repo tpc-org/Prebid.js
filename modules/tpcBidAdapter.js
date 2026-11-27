@@ -47,6 +47,13 @@ const PBS_ENDPOINT = 'https://pbs.tpcsrv.com/openrtb2/auction';
 const USER_SYNC_ENDPOINT = 'https://pbs.tpcsrv.com/cookie_sync';
 const OUTSTREAM_RENDERER_URL = 'https://s3.tpcsrv.com/prod/video.js';
 const MAX_SYNC_COUNT = 10;
+// HOL-181: billing beacon for partners with no report of their own. On direct
+// sites Prebid core sends a rendered bid's burl straight to the partner, so
+// TPC never sees the billable impression; Kontext invoices on TPC's numbers.
+// dsp-connector logs each beacon as a billed callback (partner_price = cpm),
+// which the dashboard's kontext_sync turns into Kontext revenue.
+const BILLING_BEACON_URL = 'https://dsp.tpcsrv.com/event/direct/billed';
+const BILLING_BEACON_BIDDERS = ['kontext'];
 
 const converter = ortbConverter({
   processors: pbsExtensions,
@@ -125,6 +132,26 @@ function attachOutstreamRenderer(bid) {
   });
 
   bid.renderer = renderer;
+}
+
+// onBidWon runs from Prebid core's addWinningBid, the same call that fires
+// the partner's burl, so the beacon marks the same billable moment. Prebid
+// passes the ad unit's tpc params as bid.params (an array); placementId is
+// the Stored Imp id, which is the dashboard Placement's stored_imp_id.
+function billingBeaconUrl(bid) {
+  const bidder = deepAccess(bid, 'meta.tpc.realBidder') || deepAccess(bid, 'meta.adapterCode');
+  if (!BILLING_BEACON_BIDDERS.includes(bidder)) return null;
+  const params = Array.isArray(bid.params) ? bid.params[0] : bid.params;
+  const placementId = params && params.placementId;
+  const cpm = Number(bid.cpm);
+  if (!placementId || !(cpm > 0) || !bid.auctionId || !bid.adId) return null;
+  if (bid.currency && bid.currency !== 'USD') return null;
+  return BILLING_BEACON_URL +
+    '?p=' + encodeURIComponent(placementId) +
+    '&b=' + encodeURIComponent(bidder) +
+    '&cpm=' + encodeURIComponent(String(cpm)) +
+    '&a=' + encodeURIComponent(bid.auctionId) +
+    '&i=' + encodeURIComponent(bid.adId);
 }
 
 export const spec = {
@@ -304,6 +331,8 @@ export const spec = {
   // its view pixel, which was double-counted the same way).
   onBidWon(bid) {
     if (bid.pbsWurl) triggerPixel(bid.pbsWurl);
+    const beacon = billingBeaconUrl(bid);
+    if (beacon) triggerPixel(beacon);
   },
 
   onBidderError(args) {

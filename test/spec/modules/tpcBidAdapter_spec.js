@@ -509,5 +509,47 @@ describe('TPC Bid Adapter', function () {
       spec.onBidWon({ burl: 'https://ssp.thrad.ai/api/v2/auction/win?token=x' });
       expect(triggerPixelStub.called).to.equal(false);
     });
+
+    // HOL-181: Kontext has no report of its own; its direct-site renders are
+    // measured by a TPC billing beacon fired at the same moment as its burl.
+    const kontextWin = (over = {}) => Object.assign({
+      bidder: 'tpc',
+      cpm: 1.25,
+      currency: 'USD',
+      auctionId: 'auc-1',
+      adId: 'ad 1',
+      params: [{ accountId: 'acct', placementId: 'promptessor-bfc732a4' }],
+      meta: { adapterCode: 'kontext', tpc: { realBidder: 'kontext' } },
+    }, over);
+
+    it('fires the TPC billing beacon for a Kontext win', () => {
+      spec.onBidWon(kontextWin());
+      expect(triggerPixelStub.calledOnceWith(
+        'https://dsp.tpcsrv.com/event/direct/billed?p=promptessor-bfc732a4&b=kontext&cpm=1.25&a=auc-1&i=ad%201'
+      )).to.equal(true);
+    });
+
+    it('fires pbsWurl and the beacon for a Kontext win carrying both', () => {
+      spec.onBidWon(kontextWin({ pbsWurl: 'https://pbs.example/event?t=win' }));
+      expect(triggerPixelStub.callCount).to.equal(2);
+    });
+
+    it('accepts params as an object too', () => {
+      spec.onBidWon(kontextWin({ params: { placementId: 'learnrithm-d122e2e9' } }));
+      expect(triggerPixelStub.firstCall.args[0]).to.contain('p=learnrithm-d122e2e9');
+    });
+
+    it('sends no beacon for partners with their own reporting', () => {
+      spec.onBidWon(kontextWin({ meta: { adapterCode: 'thrad', tpc: { realBidder: 'thrad' } } }));
+      expect(triggerPixelStub.called).to.equal(false);
+    });
+
+    it('sends no beacon without a placement, price, ids or in another currency', () => {
+      spec.onBidWon(kontextWin({ params: [{}] }));
+      spec.onBidWon(kontextWin({ cpm: 0 }));
+      spec.onBidWon(kontextWin({ auctionId: undefined }));
+      spec.onBidWon(kontextWin({ currency: 'EUR' }));
+      expect(triggerPixelStub.called).to.equal(false);
+    });
   });
 });
